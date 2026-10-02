@@ -1,0 +1,65 @@
+{% extends 'partials/base-without-nav.html' %}
+{% load static %}
+
+{% block content %}
+  <div class="d-flex flex-wrap w-100 vh-100 overflow-hidden">
+    <div class="d-flex align-items-center justify-content-center flex-wrap vh-100 overflow-auto w-100">
+      <!-- start row -->
+      <div class="row vh-100 w-100">
+        <div class="col-md-5 mx-auto vh-100">
+          <div class="vh-100 d-flex justify-content-between flex-column p-4 pb-0">
+            <div class="text-center mb-5 auth-logo">
+              <img src="{% static 'assets/img/logo.svg' %}" class="img-fluid" alt="Logo" />
+            </div>
+
+            <form action="/crms/">
+              <div class="card shadow mb-5">
+                <div class="card-body">
+                  <div class="text-center">
+                    <p class="mb-3">Welcome back!</p>
+                    <div class="mb-3">
+                      <span class="avatar avatar-xxxl rounded-circle mb-2"><img src="{% static 'assets/img/profiles/avatar-14.jpg' %}" class="img-fluid rounded-circle" alt="Profile" /></span>
+                      <h5 class="mb-0">Adrian Davies</h5>
+                    </div>
+                  </div>
+                  <div class="mb-3">
+                    <div class="input-group input-group-flat pass-group">
+                      <input type="password" class="form-control pass-input" placeholder="Enter Your Password" />
+                      <span class="input-group-text toggle-password"><i class="ti ti-eye-off"></i></span>
+                    </div>
+                  </div>
+                  <div class="mb-0">
+                    <button type="submit" class="btn btn-primary w-100">Log In</button>
+                  </div>
+                </div> <!-- end card body -->
+              </div> <!-- end card -->
+            </form>
+
+            <div>
+              <div class="d-flex align-items-center flex-wrap gap-3 justify-content-center mb-3">
+                <a href="javascript:void(0);">Terms & Condition</a>
+                <a href="javascript:void(0);">Privacy</a>
+                <a href="javascript:void(0);">Help</a>
+                <div class="dropdown">
+                  <a href="javascript:void(0);" class="dropdown-toggle border-0 p-0 bg-transparent shadow-none" data-bs-toggle="dropdown">English</a>
+                  <div class="dropdown-menu dropdown-menu-end">
+                    <a href="javascript:void(0);" class="dropdown-item">French</a>
+                    <a href="javascript:void(0);" class="dropdown-item">Spanish</a>
+                  </div>
+                </div>
+              </div>
+              <div class="text-center pb-4">
+                <p class="text-dark mb-0">
+                  Copyright &copy;<script>
+                                    document.write(new Date().getFullYear())
+                                  </script>- CRMS
+                </p>
+              </div>
+            </div>
+          </div>
+        </div> <!-- end col -->
+      </div>
+      <!-- end row -->
+    </div>
+  </div>
+{% endblock %}

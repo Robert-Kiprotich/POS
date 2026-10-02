@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# Exit immediately if a command exits with a non-zero status
+set -e
+
+echo "Navigating to frontend..."
+cd frontend
+
+echo "Building frontend production assets..."
+npm run build
+
+echo "Returning to project root..."
+cd ..
+
+echo "Starting Django development server..."
+python manage.py runserver

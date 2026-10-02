@@ -1,0 +1,29 @@
+Binding headquaters to admin
+
+from django.db.models import Q
+from api.utils import get_head_office_branch
+from users.models import User
+
+hq = get_head_office_branch()
+staff = User.objects.filter(
+    Q(role__role_name__icontains="administrator")
+    | Q(role__role_name__icontains="branch manager")
+    
+)
+print("Binding:", list(staff.values_list("username", flat=True)))
+staff.update(branch=hq)
+
+print("Head Office staff:", list(hq.staff.values_list("username", flat=True)))
+
+
+rearramging datrabase
+from django.db import transaction
+from api.utils import get_head_office_branch
+from api.models import Product, BranchStock
+
+hq = get_head_office_branch()
+with transaction.atomic():
+    for p in Product.objects.exclude(branch_stocks__branch=hq):
+        BranchStock.objects.create(branch=hq, product=p, stock_quantity=0, reorder_level=5)
+
+print("Done. Head Office stock rows:", BranchStock.objects.filter(branch=hq).count())

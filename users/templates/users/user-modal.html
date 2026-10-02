@@ -1,0 +1,575 @@
+{% load static %}
+
+<!-- Add Canvas -->
+<div class="offcanvas offcanvas-end offcanvas-large" tabindex="-1" id="offcanvas_add">
+  <div class="offcanvas-header border-bottom">
+    <h5 class="mb-0">Add New Deal</h5>
+    <button type="button" class="btn-close custom-btn-close border p-1 me-0 d-flex align-items-center justify-content-center rounded-circle" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body">
+    <form id="frmUsers">
+      {% csrf_token %}
+      <div class="row">
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">First Name <span class="text-danger">*</span></label>
+            <input type="text" name="firstname" id="usr_firstname" class="form-control" />
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Last Name <span class="text-danger">*</span></label>
+            <input type="text"  name="lastname" id="usr_lastname" class="form-control" />
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Email <span class="text-danger">*</span></label>
+            <input type="email"  name="email" id="usr_email" class="form-control" />
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Phone Number <span class="text-danger">*</span></label>
+            <input type="text"  name="phone" id="usr_phone" class="form-control" />
+          </div>
+        </div>
+        <div class="col-md-12">
+          <div class="mb-3">
+            <label class="form-label">Username <span class="text-danger">*</span></label>
+            <input type="text" name="username" id="usr_username" class="form-control" />
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <div class="d-flex align-items-center justify-content-between">
+              <label class="form-label">Role <span class="text-danger">*</span></label>
+              <a href="javascript:void(0);" class="label-add link-primary" data-bs-toggle="offcanvas" data-bs-target="#offcanvas_pipeline"><i class="ti ti-plus me-1"></i>Add New</a>
+            </div>
+            <select class="select" name="userrole" id="usr_role">
+              <option>Choose Role</option>
+              {% for role in roles %}
+              <option value="{{role.id}}">{{role.role_name}}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Extension Number<span class="text-danger">*</span></label>
+            <select class="select" name="endpoint" id="usr_exten">
+              <option>Choose Extension</option>
+              {% for ext in endpoints %}
+              <option value="{{ext.id}}">{{ext.id}}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <!--div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Deal Value<span class="text-danger">*</span></label>
+            <input class="form-control" type="text" />
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Currency <span class="text-danger">*</span></label>
+            <select class="select">
+              <option>Choose</option>
+              <option>Dollar</option>
+              <option>Euro</option>
+              <option>Pound</option>
+              <option>Rupee</option>
+            </select>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Period <span class="text-danger">*</span></label>
+            <select class="select">
+              <option>Choose</option>
+              <option>Days</option>
+              <option>Month</option>
+            </select>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Period Value <span class="text-danger">*</span></label>
+            <input class="form-control" type="text" />
+          </div>
+        </div>
+        <div class="col-md-12">
+          <div class="mb-3">
+            <label class="form-label">Contact <span class="text-danger">*</span></label>
+            <select class="multiple-img" multiple="multiple">
+              <option data-image="{% static 'assets/img/profiles/avatar-19.jpg' %}" selected>Darlee Robertson</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-20.jpg' %}">Sharon Roy</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-21.jpg' %}">Vaughan Lewis</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-23.jpg' %}">Jessica Louise</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-16.jpg' %}">Carol Thomas</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Project <span class="text-danger">*</span></label>
+            <input class="input-tags form-control border-0 h-100" data-choices data-choices-limit="infinite" data-choices-removeItem type="text" value="Devops Design, MargrateDesign, UI for Chat" />
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Due Date <span class="text-danger">*</span></label>
+            <div class="input-group w-auto input-group-flat">
+              <input type="text" class="form-control" data-provider="flatpickr" data-date-format="d M, Y" />
+              <span class="input-group-text"><i class="ti ti-calendar"></i></span>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Expected Closing Date <span class="text-danger">*</span></label>
+            <div class="input-group w-auto input-group-flat">
+              <input type="text" class="form-control" data-provider="flatpickr" data-date-format="d M, Y" />
+              <span class="input-group-text"><i class="ti ti-calendar"></i></span>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-12">
+          <div class="mb-3">
+            <label class="form-label">Assignee <span class="text-danger">*</span></label>
+            <select class="multiple-img" multiple="multiple">
+              <option data-image="{% static 'assets/img/profiles/avatar-19.jpg' %}">Darlee Robertson</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-20.jpg' %}" selected>Sharon Roy</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-21.jpg' %}">Vaughan Lewis</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-23.jpg' %}">Jessica Louise</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-16.jpg' %}">Carol Thomas</option>
+            </select>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Follow Up Date <span class="text-danger">*</span></label>
+            <div class="input-group w-auto input-group-flat">
+              <input type="text" class="form-control" data-provider="flatpickr" data-date-format="d M, Y" />
+              <span class="input-group-text"><i class="ti ti-calendar"></i></span>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Source <span class="text-danger">*</span></label>
+            <select class="select">
+              <option>Select</option>
+              <option>Google</option>
+              <option>Social Media</option>
+            </select>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Tags <span class="text-danger">*</span></label>
+            <input class="input-tags form-control border-0 h-100" data-choices data-choices-limit="infinite" data-choices-removeItem type="text" value="Collab, Rated" />
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Priority <span class="text-danger">*</span></label>
+            <select class="select">
+              <option>Select</option>
+              <option>High</option>
+              <option>Low</option>
+              <option>Medium</option>
+            </select>
+          </div>
+        </div>
+        <div class="col-lg-12">
+          <div class="mb-3">
+            <label class="form-label">Description <span class="text-danger">*</span></label>
+            <div class="editor pages-editor"></div>
+          </div>
+        </div-->
+      </div>
+      <div class="d-flex align-items-center justify-content-end">
+        <button type="button" data-bs-dismiss="offcanvas" class="btn btn-light me-2">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create New</button>
+      </div>
+    </form>
+  </div>
+</div>
+<!-- /Add Canvas -->
+
+<!-- edit Canvas -->
+<div class="offcanvas offcanvas-end offcanvas-large" tabindex="-1" id="offcanvas_edit">
+  <div class="offcanvas-header border-bottom">
+    <h5 class="mb-0">Edit Deal</h5>
+    <button type="button" class="btn-close custom-btn-close border p-1 me-0 d-flex align-items-center justify-content-center rounded-circle" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body">
+    <form action="deals">
+      <div class="row">
+        <div class="col-md-12">
+          <div class="mb-3">
+            <label class="form-label">Deal Name <span class="text-danger">*</span></label>
+            <input type="text" class="form-control" value="Annual Software Subscription" />
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <div class="d-flex align-items-center justify-content-between">
+              <label class="form-label">Pipeine <span class="text-danger">*</span></label>
+              <a href="javascript:void(0);" class="label-add link-primary" data-bs-toggle="offcanvas" data-bs-target="#offcanvas_pipeline"><i class="ti ti-plus me-1"></i>Add New</a>
+            </div>
+            <select class="select">
+              <option>Choose</option>
+              <option selected>Sales</option>
+              <option>Marketing</option>
+              <option>Calls</option>
+            </select>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Status <span class="text-danger">*</span></label>
+            <select class="select">
+              <option>Choose</option>
+              <option selected>Open</option>
+              <option>Lost</option>
+              <option>Won</option>
+            </select>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Deal Value<span class="text-danger">*</span></label>
+            <input class="form-control" type="text" value="$04,51,000" />
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Currency <span class="text-danger">*</span></label>
+            <select class="select">
+              <option>Choose</option>
+              <option selected>Dollar</option>
+              <option>Euro</option>
+              <option>Pound</option>
+              <option>Rupee</option>
+            </select>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Period <span class="text-danger">*</span></label>
+            <select class="select">
+              <option>Choose</option>
+              <option selected>Days</option>
+              <option>Month</option>
+            </select>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Period Value <span class="text-danger">*</span></label>
+            <input class="form-control" type="text" value="Collins" />
+          </div>
+        </div>
+        <div class="col-md-12">
+          <div class="mb-3">
+            <label class="form-label">Contact <span class="text-danger">*</span></label>
+            <select class="multiple-img" multiple="multiple">
+              <option data-image="{% static 'assets/img/profiles/avatar-19.jpg' %}" selected>Darlee Robertson</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-20.jpg' %}">Sharon Roy</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-21.jpg' %}">Vaughan Lewis</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-23.jpg' %}">Jessica Louise</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-16.jpg' %}">Carol Thomas</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Project <span class="text-danger">*</span></label>
+            <input class="input-tags form-control border-0 h-100" data-choices data-choices-limit="infinite" data-choices-removeItem type="text" value="Devops Design, MargrateDesign, UI for Chat" />
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Due Date <span class="text-danger">*</span></label>
+            <div class="input-group w-auto input-group-flat">
+              <input type="text" class="form-control" data-provider="flatpickr" data-date-format="d M, Y" value="20 Jan 2025" />
+              <span class="input-group-text"><i class="ti ti-calendar"></i></span>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Expected Closing Date <span class="text-danger">*</span></label>
+            <div class="input-group w-auto input-group-flat">
+              <input type="text" class="form-control" data-provider="flatpickr" data-date-format="d M, Y" value="15 May 2025" />
+              <span class="input-group-text"><i class="ti ti-calendar"></i></span>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-12">
+          <div class="mb-3">
+            <label class="form-label">Assignee <span class="text-danger">*</span></label>
+            <select class="multiple-img" multiple="multiple">
+              <option data-image="{% static 'assets/img/profiles/avatar-19.jpg' %}">Darlee Robertson</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-20.jpg' %}" selected>Sharon Roy</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-21.jpg' %}">Vaughan Lewis</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-23.jpg' %}">Jessica Louise</option>
+              <option data-image="{% static 'assets/img/profiles/avatar-16.jpg' %}">Carol Thomas</option>
+            </select>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Follow Up Date <span class="text-danger">*</span></label>
+            <div class="input-group w-auto input-group-flat">
+              <input type="text" class="form-control" data-provider="flatpickr" data-date-format="d M, Y" value="20 Sep 2025" />
+              <span class="input-group-text"><i class="ti ti-calendar"></i></span>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Source <span class="text-danger">*</span></label>
+            <select class="select">
+              <option>Select</option>
+              <option>Google</option>
+              <option selected>Social Media</option>
+            </select>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Tags <span class="text-danger">*</span></label>
+            <input class="input-tags form-control border-0 h-100" data-choices data-choices-limit="infinite" data-choices-removeItem type="text" value="Collab, Rated" />
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="mb-3">
+            <label class="form-label">Priority <span class="text-danger">*</span></label>
+            <select class="select">
+              <option>Select</option>
+              <option selected>High</option>
+              <option>Low</option>
+              <option>Medium</option>
+            </select>
+          </div>
+        </div>
+        <div class="col-lg-12">
+          <div class="mb-3">
+            <label class="form-label">Description <span class="text-danger">*</span></label>
+            <div class="editor pages-editor">Key decision-maker overseeing operations and strategic planning. Responsible for approving major deals and partnerships. Prefers direct communication via email.</div>
+          </div>
+        </div>
+      </div>
+      <div class="d-flex align-items-center justify-content-end">
+        <button type="button" data-bs-dismiss="offcanvas" class="btn btn-light me-2">Cancel</button>
+        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#create_success">Save Changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+<!-- /edit Canvas -->
+
+<!-- success modal -->
+<div class="modal fade" id="create_success">
+  <div class="modal-dialog modal-dialog-centered modal-sm rounded-0">
+    <div class="modal-content rounded-0">
+      <div class="modal-body p-4 text-center position-relative">
+        <div class="mb-3 position-relative z-1">
+          <span class="avatar avatar-xl badge-soft-success border-0 text-success rounded-circle"><i class="ti ti-medal fs-24"></i></span>
+        </div>
+        <h5 class="mb-1">Deal Created Successfully!!!</h5>
+        <p class="mb-3">View the details of deal, created</p>
+        <div class="d-flex justify-content-center">
+          <a href="#" class="btn btn-light position-relative z-1 me-2 w-100" data-bs-dismiss="modal">Cancel</a>
+          <a href="deals-details" class="btn btn-primary position-relative z-1 w-100">View Details</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- success modal -->
+
+<!-- delete modal -->
+<div class="modal fade" id="delete_deal">
+  <div class="modal-dialog modal-dialog-centered modal-sm rounded-0">
+    <div class="modal-content rounded-0">
+      <div class="modal-body p-4 text-center position-relative">
+        <div class="mb-3 position-relative z-1">
+          <span class="avatar avatar-xl badge-soft-danger border-0 text-danger rounded-circle"><i class="ti ti-trash fs-24"></i></span>
+        </div>
+        <h5 class="mb-1">Delete Confirmation</h5>
+        <p class="mb-3">Are you sure you want to remove deal you selected.</p>
+        <div class="d-flex justify-content-center">
+          <a href="#" class="btn btn-light position-relative z-1 me-2 w-100" data-bs-dismiss="modal">Cancel</a>
+          <a href="#" class="btn btn-primary position-relative z-1 w-100" data-bs-dismiss="modal">Yes, Delete</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- delete modal -->
+
+<!-- Add New Pipeline -->
+<div class="offcanvas offcanvas-end offcanvas-large" tabindex="-1" id="offcanvas_pipeline">
+  <div class="offcanvas-header border-bottom">
+    <h5 class="mb-0">Add New Pipeline</h5>
+    <button type="button" class="btn-close custom-btn-close border p-1 me-0 d-flex align-items-center justify-content-center rounded-circle" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body">
+    <form action="deals">
+      <div>
+        <div class="mb-3">
+          <label class="form-label">Pipeline Name <span class="text-danger">*</span></label>
+          <input class="form-control" type="text" />
+        </div>
+        <div class="mb-3">
+          <div class="pipe-title d-flex align-items-center justify-content-between mb-2">
+            <label class="form-label m-0">Pipeline Stages</label>
+            <a href="#" class="add-stage link-primary" data-bs-toggle="modal" data-bs-target="#add_stage"><i class="ti ti-plus me-1"></i>Add New</a>
+          </div>
+          <div class="pipeline-listing">
+            <div class="pipeline-item d-flex align-items-center justify-content-between p-2 shadow-sm bg-white mb-1 border-start border-3 border-warning">
+              <p class="mb-0 fw-semibold me-3 text-dark">
+                <i class="ti ti-grip-vertical text-body"></i> Inpipeline
+              </p>
+              <div class="action-pipeline">
+                <a href="#" data-bs-toggle="modal" data-bs-target="#edit_stage" class="btn btn-sm btn-outline-light border-0"><i class="ti ti-edit me-1"></i>Edit</a>
+                <a href="#" data-bs-toggle="modal" data-bs-target="#delete_stage" class="btn btn-sm btn-outline-light border-0"><i class="ti ti-trash me-1"></i>Delete</a>
+              </div>
+            </div>
+            <div class="pipeline-item d-flex align-items-center justify-content-between p-2 shadow-sm bg-white mb-1 border-start border-3 border-warning">
+              <p class="mb-0 me-3 fw-semibold text-dark">
+                <i class="ti ti-grip-vertical text-body"></i> Follow Up
+              </p>
+              <div class="action-pipeline">
+                <a href="#" data-bs-toggle="modal" data-bs-target="#edit_stage" class="btn btn-sm btn-outline-light border-0"><i class="ti ti-edit me-1"></i>Edit</a>
+                <a href="#" data-bs-toggle="modal" data-bs-target="#delete_stage" class="btn btn-sm btn-outline-light border-0"><i class="ti ti-trash me-1"></i>Delete</a>
+              </div>
+            </div>
+            <div class="pipeline-item d-flex align-items-center justify-content-between p-2 shadow-sm bg-white mb-1 border-start border-3 border-warning">
+              <p class="mb-0 me-3 fw-semibold text-dark">
+                <i class="ti ti-grip-vertical text-body"></i> Schedule Service
+              </p>
+              <div class="action-pipeline">
+                <a href="#" data-bs-toggle="modal" data-bs-target="#edit_stage" class="btn btn-sm btn-outline-light border-0"><i class="ti ti-edit me-1"></i>Edit</a>
+                <a href="#" data-bs-toggle="modal" data-bs-target="#delete_stage" class="btn btn-sm btn-outline-light border-0"><i class="ti ti-trash me-1"></i>Delete</a>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Access</label>
+          <div class="d-flex flex-wrap access-item nav mb-3">
+            <div class="radio-btn me-2" data-bs-toggle="tab" data-bs-target="#all">
+              <input type="radio" class="status-radio" id="all" name="status" checked="" />
+              <label for="all">All</label>
+            </div>
+            <div class="radio-btn" data-bs-toggle="tab" data-bs-target="#select-person">
+              <input type="radio" class="status-radio" id="select" name="status" />
+              <label for="select">Select Person</label>
+            </div>
+          </div>
+          <div class="tab-content">
+            <div class="tab-pane fade" id="select-person">
+              <div class="access-wrapper">
+                <div class="d-flex align-items-center mb-1 justify-content-between shadow-sm rounded p-2 bg-white border">
+                  <div class="d-flex align-items-center gap-2">
+                    <div class="avatar avatar-sm">
+                      <img src="{% static 'assets/img/profiles/avatar-21.jpg' %}" alt="Image" class="rounded-circle" />
+                    </div>
+                    <span>Vaughan Lewis</span>
+                  </div>
+                  <a href="javascript:void(0);" class="link-primary">Remove</a>
+                </div>
+                <div class="d-flex align-items-center mb-1 justify-content-between shadow-sm rounded p-2 bg-white border">
+                  <div class="d-flex align-items-center gap-2">
+                    <div class="avatar avatar-sm">
+                      <img src="{% static 'assets/img/profiles/avatar-08.jpg' %}" alt="Image" class="rounded-circle" />
+                    </div>
+                    <span>Katherine Brooks</span>
+                  </div>
+                  <a href="javascript:void(0);" class="link-primary">Remove</a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="d-flex align-items-center justify-content-end">
+        <button type="button" data-bs-dismiss="offcanvas" class="btn btn-light me-2">Cancel</button>
+        <button type="button" class="btn btn-primary">Create New</button>
+      </div>
+    </form>
+  </div>
+</div>
+<!-- /Add New Pipeline -->
+
+<!-- Add New Stage -->
+<div class="modal custom-modal fade" id="add_stage" role="dialog">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title mb-0">Add New Stage</h5>
+        <button class="btn-close custom-btn-close border p-1 me-0 text-dark" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form action="deals">
+        <div class="modal-body">
+          <div class="mb-0">
+            <label class="form-label">Stage Name<span class="ms-1 text-danger">*</span></label>
+            <input type="text" class="form-control" />
+          </div>
+        </div>
+        <div class="modal-btn text-end p-3 border-top">
+          <a href="#" class="btn btn-light me-2" data-bs-dismiss="modal">Cancel</a>
+          <button type="submit" class="btn btn-danger">Create New</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+<!-- /Add New Stage -->
+
+<!-- Edit Stage -->
+<div class="modal custom-modal fade" id="edit_stage" role="dialog">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title mb-0">Edit Stage</h5>
+        <button class="btn-close custom-btn-close border p-1 me-0 text-dark" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form action="deals">
+        <div class="modal-body">
+          <div class="mb-0">
+            <label class="form-label">Edit Stage<span class="ms-1 text-danger">*</span></label>
+            <input type="text" class="form-control" value="Inpipeline" />
+          </div>
+        </div>
+        <div class="modal-btn text-end p-3 border-top">
+          <a href="#" class="btn btn-light me-2" data-bs-dismiss="modal">Cancel</a>
+          <button type="submit" class="btn btn-danger">Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+<!-- /Edit Stage -->
+
+<!-- delete stage -->
+<div class="modal fade" id="delete_stage">
+  <div class="modal-dialog modal-dialog-centered modal-sm rounded-0">
+    <div class="modal-content rounded-0">
+      <div class="modal-body p-4 text-center position-relative">
+        <div class="mb-3 position-relative z-1">
+          <span class="avatar avatar-xl badge-soft-danger border-0 text-danger rounded-circle"><i class="ti ti-trash fs-24"></i></span>
+        </div>
+        <h5 class="mb-1">Remove Stage</h5>
+        <p class="mb-3">Are you sure you want to remove stage you selected.</p>
+        <div class="d-flex justify-content-center">
+          <a href="#" class="btn btn-light position-relative z-1 me-2 w-100" data-bs-dismiss="modal">Cancel</a>
+          <a href="#" class="btn btn-primary position-relative z-1 w-100" data-bs-dismiss="modal">Yes, Delete</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- delete stage -->
