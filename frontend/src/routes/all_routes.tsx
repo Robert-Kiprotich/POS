@@ -20,6 +20,11 @@ export const all_routes = {
   compliance:"/compliance",
   salaries:"/salaries",
   cheques:"/cheques",
+  suppliers:"/suppliers",
+  cashier:"/cashier-records",
+  permissions:"/menu-permissions",
+  reports:"/reports",
+  store:"/store",
  
   customers: "/customers",
   users: "/users",

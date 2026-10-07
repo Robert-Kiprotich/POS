@@ -52,6 +52,7 @@ ROLES = [
     (8, "Security Guard",  "Premises security",               False),
     (9, "Driver",          "Delivers goods to customers and branches", False),
     (10, "Loader",         "Loads and unloads goods",         False),
+    (11, "Veterinarian",   "Provides veterinary care",        True),
 ]
 
 
@@ -148,6 +149,7 @@ TEST_USERS = [
     ("sales",   "sales123",   "Sales",  "Clerk",         "sales@pos.local",   "0700000003", 3, False),
     ("store",   "store123",   "Store",  "Keeper",        "store@pos.local",   "0700000004", 4, False),
     ("cashier", "cashier123", "Main",   "Cashier",       "cashier@pos.local", "0700000005", 5, False),
+    ("vet", "vet123", "Main",   "Veterinarian",       "vet@pos.local", "0700000006", 11, False)
 ]
 
 
@@ -242,7 +244,7 @@ TEST_EMPLOYEES = [
     ("sales",   "Sales",  "Clerk",         "Sales Clerk",          "Sales",          3, "0700000003", "sales@pos.local",   "female", "full_time", "active",  45000),
     ("store",   "Store",  "Keeper",        "Store Keeper",         "Warehouse",      4, "0700000004", "store@pos.local",   "male",   "full_time", "active",  50000),
     ("cashier", "Main",   "Cashier",       "Cashier",              "Finance",        5, "0700000005", "cashier@pos.local", "female", "full_time", "active",  48000),
-
+    ("veterinarian", "Mr.", "Kirui", "Veterinarian", "Veterinary", 11, "0700000006", "veterinarian@pos.local", "male", "full_time", "active", 60000),
     # HR-only staff — no linked User account.
     (None, "Mary",   "Wanjiku", "Cleaner",        "Facilities", 6, "0711000001", "", "female", "full_time", "active", 25000),
     (None, "John",   "Otieno",  "Groundsman",     "Facilities", 7, "0711000002", "", "male",   "full_time", "active", 27000),

@@ -2,12 +2,8 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import API from "../../services/api";
 import { showSuccess, showError, showWarning } from "../../components/alerts/Alerts";
 import { useAutoRefresh } from "../../hooks/useAutoRefresh";
+import { useBranchAccess } from "../../hooks/useBranchAccess";
 
-// NOTE: this file assumed a `branchId` value from outside the component (it was
-// referenced but never declared in the version I was given). If your app keeps
-// the active branch in a context/hook, wire that up here instead of the
-// placeholder below — everything else in this file does not depend on it.
-// import { useBranch } from "../../context/BranchContext";
 
 const PAYMENT_METHODS = ["Cash", "Card", "M-Pesa", "Bank Transfer", "Other"] as const;
 const SALE_TYPES = ["Retail", "Wholesale","Credit"] as const;
@@ -166,37 +162,35 @@ function buildReceiptText(opts: {
   ].join("\n");
 }
 
-function printReceiptText(receiptText: string, title: string) {
-  const win = window.open("", "_blank", "width=1,height=1,left=-1000,top=-1000");
+function isA4Type(saleType: string) {
+  return saleType === "Wholesale" || saleType === "Credit";
+}
+
+function printReceiptText(receiptText: string, title: string, saleType: string) {
+  const a4 = isA4Type(saleType);
+  const win = window.open("", "_blank", a4 ? "width=900,height=700" : "width=1,height=1,left=-1000,top=-1000");
   if (!win) {
-    showWarning("Allow popups to enable silent receipt printing.", "Print Blocked");
+    showWarning("Allow popups to enable receipt printing.", "Print Blocked");
     return;
   }
 
-  win.document.write(`
-    <html>
-      <head>
-        <title>${title}</title>
-        <style>
-          @page { size: 80mm auto; margin: 0; }
-          html, body { margin: 0; padding: 0; }
-          body { padding: 8px; }
-          pre {
-            font-family: "Courier New", Courier, monospace;
-            font-size: 12px;
-            line-height: 1.25;
-            white-space: pre-wrap;
-            word-break: break-word;
-            margin: 0;
-          }
-        </style>
-      </head>
-      <body><pre>${receiptText}</pre></body>
-    </html>
-  `);
+  const css = a4
+    ? `@page { size: A4 portrait; margin: 15mm; }
+       html, body { margin: 0; padding: 0; }
+       pre { font-family: "Courier New", monospace; font-size: 13px; line-height: 1.4;
+             white-space: pre-wrap; margin: 0; }`
+    : `@page { size: 80mm auto; margin: 0; }
+       html, body { margin: 0; padding: 0; }
+       body { padding: 8px; }
+       pre { font-family: "Courier New", monospace; font-size: 12px; line-height: 1.25;
+             white-space: pre-wrap; margin: 0; }`;
+
+  win.document.write(
+    `<html><head><title>${title}</title><style>${css}</style></head><body><pre>${receiptText}</pre></body></html>`
+  );
   win.document.close();
 
-  win.onload = () => {
+  setTimeout(() => {
     try {
       win.focus();
       win.print();
@@ -205,17 +199,16 @@ function printReceiptText(receiptText: string, title: string) {
     } finally {
       setTimeout(() => win.close(), 1000);
     }
-  };
+  }, 300);
 }
 function emptyPayment(): Payment {
   return { uid: uid(), sale_type: "Retail", method: "Cash", amount: "", reference: "", received_by: "" };
 }
 
 export default function POS() {
-  // Placeholder — replace with your real branch context/hook.
-   const [branches, setBranches] = useState<any[]>([]);
+   const { branches, isHO, userBranchId, hoId, loading: loadingAccess } = useBranchAccess();
   const [branchId, setBranchId] = useState<number | "">("");
-
+  const [branchStock, setBranchStock] = useState<Record<number, any>>({});
   const [customers, setCustomers] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [salesClerks, setSalesClerks] = useState<any[]>([]);
@@ -244,24 +237,27 @@ export default function POS() {
   const [loadingReceipts, setLoadingReceipts] = useState(true);
   const [receiptSearch, setReceiptSearch] = useState("");
   const [panelView, setPanelView] = useState<"receipts" | "today">("receipts");
-
+  // Branch users are locked to their own branch; Head Office defaults to HQ and can switch.
+  useEffect(() => {
+    if (loadingAccess) return;
+    setBranchId(prev => prev || (isHO ? (hoId ?? branches[0]?.id ?? "") : (userBranchId ?? "")));
+  }, [loadingAccess, isHO, hoId, userBranchId, branches]);
   // Persist to localStorage whenever the list changes (survives page reloads)
-  useEffect(() => { writeSavedReceipts(receipts); }, [receipts]);
   const loadReceipts = useCallback(async () => {
+    if (!branchId) return;
     setLoadingReceipts(true);
     try {
-      const res = await API.get("sales/receipts/");
+      const res = await API.get("sales/receipts/", { params: { branch: branchId, page_size: 300 } });
       const raw: SaleReceipt[] = res.data?.results || res.data?.data || (Array.isArray(res.data) ? res.data : []);
-           setReceipts(prev => mergeReceipts(prev, raw));
+      setReceipts(raw);
     } catch (err) {
       console.error("Error loading saved receipts:", err);
     } finally {
       setLoadingReceipts(false);
     }
-  }, []);
+  }, [branchId]);
 
   useEffect(() => { loadReceipts(); }, [loadReceipts]);
-
    const todaysSales = useMemo(() => receipts.filter(r => isToday(r.created_at)), [receipts]);
   const todaysTotal = todaysSales.reduce((s, r) => s + (Number(r.grand_total) || 0), 0);
 
@@ -282,17 +278,11 @@ export default function POS() {
   const loadLookups = useCallback(async (silent = false) => {
     if (!silent) setLoadingLookups(true);
     try {
-            const [custRes, prodRes, userRes, branchRes] = await Promise.all([
+                 const [custRes, prodRes, userRes] = await Promise.all([
         API.get("customers/"),
         API.get("products/"),
         API.get("users/"),
-        API.get("branches/"),
       ]);
-      const branchList: any[] = branchRes.data?.results || branchRes.data?.data || (Array.isArray(branchRes.data) ? branchRes.data : []);
-      setBranches(branchList);
-      // Default to Head Office; keep the current choice on refreshes (loadLookups runs after each sale)
-      const hq = branchList.find(b => (b.name || "").trim().toLowerCase() === "head office");
-      setBranchId(prev => prev || hq?.id || branchList[0]?.id || "");
       setCustomers(custRes.data?.results || custRes.data?.data || (Array.isArray(custRes.data) ? custRes.data : []));
       setProducts(prodRes.data?.results || prodRes.data?.data || (Array.isArray(prodRes.data) ? prodRes.data : []));
       const allUsers = userRes.data?.results || userRes.data?.data || (Array.isArray(userRes.data) ? userRes.data : []);
@@ -305,9 +295,34 @@ export default function POS() {
   }, []);
 
   useEffect(() => { loadLookups(); }, [loadLookups]);
+    const loadBranchStock = useCallback(async () => {
+    if (!branchId) { setBranchStock({}); return; }
+    try {
+      const res = await API.get("branch-stocks/", { params: { branch: branchId, page_size: 5000 } });
+      const rows: any[] = res.data?.results || (Array.isArray(res.data) ? res.data : []);
+      const map: Record<number, any> = {};
+      rows.forEach(r => { map[r.product] = r; });
+      setBranchStock(map);
+    } catch (err) {
+      console.error("Error loading branch stock:", err);
+    }
+  }, [branchId]);
+
+  // New branch = new stock and prices, so start with a clean cart
+  useEffect(() => {
+    loadBranchStock();
+    setItems([]);
+    setPayments([emptyPayment()]);
+  }, [loadBranchStock]);
+
+  const branchClerks = useMemo(
+    () => salesClerks.filter(u => !branchId || u.branch === branchId),
+    [salesClerks, branchId]
+  );
    useAutoRefresh(() => {
     loadLookups(true);
     loadReceipts();
+    loadBranchStock();
   }, 30000);
 
   // Re-price every line item whenever the driving Sale Type (payments[0])
@@ -341,16 +356,19 @@ unit_price: saleType === "Wholesale" ? i.wholesale_price : i.retail_price,
     ).slice(0, 8);
   }, [productSearch, products]);
 
- function priceFor(product: any) {
-  return saleType === "Wholesale"
-    ? parseFloat(product.wholesale_price) || 0
-    : parseFloat(product.retail_price) || 0;
-}
-  function stockFor(productId: number) {
-    const p = products.find(pr => pr.id === productId);
-    return p ? Number(p.stock_quantity) || 0 : 0;
+  function pricesFor(product: any) {
+    const bs = branchStock[product.id];
+    const retail = parseFloat(bs?.effective_retail_price ?? product.retail_price) || 0;
+    const wholesale = parseFloat(bs?.effective_wholesale_price ?? product.wholesale_price) || 0;
+    return { retail, wholesale: wholesale || retail };
   }
-
+  function priceFor(product: any) {
+    const p = pricesFor(product);
+    return saleType === "Wholesale" ? p.wholesale : p.retail;
+  }
+  function stockFor(productId: number) {
+    return Number(branchStock[productId]?.stock_quantity) || 0;
+  }
   function qtyFor(productId: number) {
     return pendingQty[productId] ?? 1;
   }
@@ -362,12 +380,11 @@ unit_price: saleType === "Wholesale" ? i.wholesale_price : i.retail_price,
     }
     const available = stockFor(product.id);
     const qty = Math.max(1, qtyFor(product.id));
-    if (available && qty > available) {
+    if (qty > available) {
       showWarning(`Only ${available} in stock for ${product.name}.`, "Not Enough Stock");
       return;
     }
-    const retailPrice = parseFloat(product.retail_price) || 0;
-    const wholesalePrice = parseFloat(product.wholesale_price) || 0;
+      const { retail: retailPrice, wholesale: wholesalePrice } = pricesFor(product);
     setItems(prev => {
       const existing = prev.find(i => i.product_id === product.id);
       if (existing) {
@@ -447,6 +464,7 @@ unit_price: saleType === "Wholesale" ? i.wholesale_price : i.retail_price,
     setProductSearch("");
     setShowProductDropdown(false);
     setPendingQty({});
+          loadBranchStock();
     setError("");
   }
   function handlePrint() {
@@ -454,7 +472,7 @@ unit_price: saleType === "Wholesale" ? i.wholesale_price : i.retail_price,
       showWarning("Complete a sale first, then print its receipt.", "Nothing to Print");
       return;
     }
-    printReceiptText(lastReceipt.text, `Receipt ${lastReceipt.orderNumber}`);
+      printReceiptText(lastReceipt.text, `Receipt ${lastReceipt.orderNumber}`, lastReceipt.saleType);
   }
   async function handleSubmit() {
     setError("");
@@ -625,15 +643,21 @@ setLastReceipt(isCredit ? null : { text: receiptText, orderNumber });
                   </div>
                 )}
               </div>
-                 {/* <select
-                className="form-select form-select-sm fs-13"
-                style={{ width: 180 }}
-                value={branchId}
-                onChange={e => setBranchId(e.target.value ? Number(e.target.value) : "")}
-              >
-                <option value="">Select branch…</option>
-                {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select> */}
+                 {isHO ? (
+                <select
+                  className="form-select form-select-sm fs-13"
+                  style={{ width: 180 }}
+                  value={branchId}
+                  onChange={e => setBranchId(e.target.value ? Number(e.target.value) : "")}
+                >
+                  <option value="">Select branch…</option>
+                  {branches.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              ) : (
+                <span className="badge bg-primary-transparent text-primary fs-12">
+                  {branches.find((b: any) => b.id === branchId)?.name || "Your branch"}
+                </span>
+              )}
                             <div className="d-flex gap-2">
                 <button
                   className="btn btn-sm btn-outline-secondary"
@@ -1011,7 +1035,7 @@ setLastReceipt(isCredit ? null : { text: receiptText, orderNumber });
                       <div className="fw-semibold">{money(Number(r.grand_total) || 0)}</div>
                       <button
                         className="btn btn-sm btn-outline-primary mt-1 py-0 px-2 fs-11"
-                        onClick={() => printReceiptText(r.receipt_text, `Receipt ${r.order_number}`)}
+                  onClick={() => printReceiptText(r.receipt_text, `Receipt ${r.order_number}`, r.sale_type)}
                         disabled={!r.receipt_text}
                       >
                         <i className="ti ti-printer me-1" />Reprint

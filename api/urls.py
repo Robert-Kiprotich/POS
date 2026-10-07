@@ -21,11 +21,21 @@ router.register(r"employees", EmployeeViewSet, basename="employee")
 router.register(r"compliance-records", ComplianceRecordViewSet, basename="compliance-record")
 router.register(r"salary-payments", SalaryPaymentViewSet, basename="salary-payment")
 router.register(r"cheque-deposits", ChequeDepositViewSet, basename="cheque-deposits")
+router.register(r"suppliers", SupplierViewSet, basename="supplier")
+router.register(r"business-payments", BusinessPaymentViewSet, basename="business-payment")
+router.register(r"store", StoreViewSet, basename="store")
+router.register(r"store-movements", StoreMovementViewSet, basename="store-movement")
+ 
 
 app_name = "api"
 
 urlpatterns = [
      path("admin-dashboard/", admin_dashboard, name="admin-dashboard"),
+     path("cashier-records/", cashier_records, name="cashier-records"),
+     path("menu-permissions/", menu_permissions, name="menu-permissions"),
+    path("menu-permissions/mine/", my_menu_access, name="my-menu-access"),
+     path("reports/options/", report_options, name="report-options"),
+  path("reports/", run_report, name="run-report"),
     path('', include(router.urls)),
 ]
 
@@ -57,6 +67,15 @@ def api_root_view(request, format=None):
         'compliance-records': base_url + 'compliace-records',
         'salary-payments':base_url + 'salary-payments',
         'cheque-deposits':base_url + 'cheque-deposits',
+        'suppliers': base_url + 'suppliers/',
+        'cashier-records': base_url + 'cashier-records/',
+        'menu-permissions': base_url + 'menu-permissions/',
+        'menu-permissions/mine': base_url + 'my-menu-access/',
+        'reports/options': base_url + 'reports/options/',
+        'reports': base_url + 'reports/',
+        'business-payments': base_url + 'business-payments/',
+        'store': base_url + 'store/',
+        'store-movements': base_url + 'store-movements/',
     })
 
 

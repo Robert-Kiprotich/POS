@@ -2,9 +2,9 @@ import { Outlet, useLocation, Navigate } from "react-router";
 import { useDispatch, useSelector } from "react-redux";
 import Header from "../components/header/header";
 import Sidebar from "../components/sidebar/sidebar";
-import ThemeSettings from "../components/theme-settings/themeSettings";
+
 import AISupport from "../pages/ai-support/AISupport";
-import InternalChat from "../components/chat/InternalChat";
+
 
 import { useEffect } from "react";
 import { resetMobileSidebar } from "../core/redux/sidebarSlice";
@@ -96,9 +96,8 @@ useEffect(() => {
           {!isWallboardPage && <Header/>}
           {!isWallboardPage && <Sidebar/>}
           <Outlet />
-          {!isWallboardPage && <AISupport />}
-          {!isWallboardPage && <ThemeSettings/>}
-          {!isWallboardPage && <InternalChat />}
+         
+         
        
         </div>
         <div

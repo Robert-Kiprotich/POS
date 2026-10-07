@@ -12,6 +12,7 @@ const COLUMNS = [
   { key: "first_name",          label: "Name" },
   { key: "position",            label: "Position" },
   { key: "role_name",           label: "Role" },
+  { key: "branch_name",         label: "Branch" },
   { key: "phone",               label: "Phone" },
   { key: "status",              label: "Employment" },
   { key: "system_access_state", label: "System Access" },
@@ -186,6 +187,7 @@ export default function EmployeesList() {
   const [form, setForm]         = useState<EmpForm>(emptyForm);
   const [saving, setSaving]     = useState(false);
   const [error, setError]       = useState("");
+  const [branchFilter, setBranchFilter] = useState("all");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -218,13 +220,15 @@ export default function EmployeesList() {
   }, []);
 
   useEffect(() => { load(); loadLookups(); }, [load, loadLookups]);
-  useEffect(() => { setPage(1); }, [search, statusFilter, roleFilter, accessFilter]);
+  useEffect(() => { setPage(1); }, [search, statusFilter, roleFilter, accessFilter, branchFilter]);
 
   useEffect(() => {
     let list = items;
     if (statusFilter !== "all") list = list.filter(e => e.status === statusFilter);
     if (roleFilter !== "all")   list = list.filter(e => String(e.role ?? "") === roleFilter);
     if (accessFilter !== "all") list = list.filter(e => e.system_access_state === accessFilter);
+     if (branchFilter === "none") list = list.filter(e => !e.branch);
+    else if (branchFilter !== "all") list = list.filter(e => String(e.branch ?? "") === branchFilter);
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter(e =>
@@ -239,8 +243,20 @@ export default function EmployeesList() {
       );
     }
     setFiltered(list);
-  }, [search, statusFilter, roleFilter, accessFilter, items]);
-
+  }, [search, statusFilter, roleFilter, accessFilter,branchFilter, items]);
+const handleQuickAssignBranch = async (emp: any, branchId: string) => {
+  const prev = emp.branch;
+  const name = branches.find(b => String(b.id) === branchId)?.name || "";
+  setItems(list => list.map(x => x.id === emp.id
+    ? { ...x, branch: branchId ? Number(branchId) : null, branch_name: name } : x));
+  try {
+    await API.patch(`employees/${emp.id}/`, { branch: branchId ? Number(branchId) : null });
+  } catch (err: any) {
+    setItems(list => list.map(x => x.id === emp.id ? { ...x, branch: prev } : x));
+    alert(err.response?.data?.error || "Failed to assign branch.");
+    load();
+  }
+};
   // --- Derived: does the selected role require login? ---
   const selectedRole = roles.find(r => String(r.id) === form.role);
   const roleRequiresLogin =
@@ -439,9 +455,9 @@ export default function EmployeesList() {
     }
   };
 
-  const activeFilterCount =
-    [statusFilter !== "all", roleFilter !== "all", accessFilter !== "all"].filter(Boolean).length;
-
+ const activeFilterCount =
+  [statusFilter !== "all", roleFilter !== "all", accessFilter !== "all", branchFilter !== "all"]
+    .filter(Boolean).length;
   return (
     <div className="page-wrapper">
       <div className="content">
@@ -518,6 +534,12 @@ export default function EmployeesList() {
                 ))}
               </select>
               <select className="form-select form-select-sm fs-13" style={{ width: 170 }}
+  value={branchFilter} onChange={e => setBranchFilter(e.target.value)}>
+  <option value="all">All branches</option>
+  <option value="none">Unassigned</option>
+  {branches.map(b => <option key={b.id} value={String(b.id)}>{b.name}</option>)}
+</select>
+              <select className="form-select form-select-sm fs-13" style={{ width: 170 }}
                 value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
                 <option value="all">All employment</option>
                 {statuses.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
@@ -532,7 +554,7 @@ export default function EmployeesList() {
               </select>
               {activeFilterCount > 0 && (
                 <button className="btn btn-sm btn-outline-danger"
-                  onClick={() => { setRoleFilter("all"); setStatusFilter("all"); setAccessFilter("all"); }}>
+                  onClick={() => { setRoleFilter("all"); setStatusFilter("all"); setAccessFilter("all"); setBranchFilter("all"); }}>
                   <i className="ti ti-x me-1" />Clear
                 </button>
               )}
@@ -571,6 +593,17 @@ export default function EmployeesList() {
                             ? <span className="badge bg-primary-transparent text-primary">{e.role_name}</span>
                             : <span className="text-muted">—</span>}
                         </td>
+                        <td>
+  <select
+    className="form-select form-select-sm fs-12"
+    style={{ minWidth: 140 }}
+    value={e.branch ? String(e.branch) : ""}
+    onChange={ev => handleQuickAssignBranch(e, ev.target.value)}
+  >
+    <option value="">— Unassigned —</option>
+    {branches.map(b => <option key={b.id} value={String(b.id)}>{b.name}</option>)}
+  </select>
+</td>
                         <td className="text-nowrap">{e.phone || <span className="text-muted">—</span>}</td>
                         <td>
                           <span className={`badge ${employmentBadge(e.status)}`}>

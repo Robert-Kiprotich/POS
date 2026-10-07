@@ -138,7 +138,7 @@ const Login = () => {
           </div>
 
           {/* Footer */}
-          <div className="text-center text-muted fs-12 pb-2">Superc POS.
+          <div className="text-center text-muted fs-12 pb-2">Super POS.
             © {new Date().getFullYear()} All rights reserved.
           </div>
         </div>

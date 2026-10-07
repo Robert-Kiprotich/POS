@@ -2,12 +2,9 @@ import { Route } from "react-router";
 import { all_routes } from "./all_routes";
 import Login from "../pages/auth/login/login";
 
-import ProfileSettings from "../pages/settings/ProfileSettings";
-import ExtensionsManagement from "../pages/settings/ExtensionsManagement";
-import SourcesDashboard from "../pages/users/manager/dashboards/sources";
 import ProductsList from "../pages/products/ProductsList";
 import ProductDetail from "../pages/products/ProductDetail";
-import PaymentsList from "../pages/payments/PaymentsList";
+
 import CategoriesList from "../pages/categories/CategoriesList";
 import SalesList from "../pages/sales/SalesList";
 import CustomersList from "../pages/customers/CustomersList";
@@ -24,11 +21,7 @@ import AdminDashboard from "../pages/users/admin/dashboard/dashboard";
 
 import SystemLogs from "../pages/admin/SystemLogs";
 import DynamicDashboardWrapper from "./dynamicRoute";
-import CallsReports from "../pages/reports/calls-reports";
-import QaReports from "../pages/reports/qa-reports";
-import SourcesReports from "../pages/reports/sources-reports";
-import WalkinReports from "../pages/reports/walkin-reports";
-import CaseReports from "../pages/reports/case-reports";
+
 import Calls from "../pages/users/manager/dashboards/calls";
 import QualityAnalysis from "../pages/quality-analysis/QualityAnalysis";
 import BranchesList from "../pages/branches/BranchesList";
@@ -38,6 +31,13 @@ import EmployeesList from "../pages/employees/EmployeesList";
 import ComplianceList from "../pages/compliance/ComplianceList";
 import SalariesList from "../pages/salaries/SalariesList";
 import ChequesList from "../pages/cheques/ChequesList";
+import SupplierList from "../pages/suppliers/SupplierList";
+import CashierRecords from "../pages/cashier/Cashierrecords";
+import MenuAccess from "../pages/acess/MenuAcceess";
+import Reports from "../pages/reports/Reports";
+import BusinessPayments from "../pages/payments/PaymentsList";
+import Store from "../pages/stock/Store";
+
 
 const route = all_routes;
 export const publicRoutes = [
@@ -56,15 +56,15 @@ export const publicRoutes = [
     element: <CategoriesList />,
     route: Route,
     meta_title: "Categories",
-    roles: ["administrator", "Branch Manager"],
+    
   },
   
   {
     id: "198",
     path: route.payments,
-    element: <PaymentsList />,
+    element: <BusinessPayments />,
     route: Route,
-    meta_title: "Coming Soon",
+    meta_title: "Payments",
   },
   {
     id: "199",
@@ -72,7 +72,7 @@ export const publicRoutes = [
     element: <CategoriesList/>,
     route: Route,
     meta_title: "Branch Manager Dashboard",
-    les: ["administrator", "Branch Manager"],
+   
   },
   {
     id: "155",
@@ -80,7 +80,7 @@ export const publicRoutes = [
     element: <SalesList />,
     route: Route,
     meta_title: "Platform Settings",
-    roles: ["administrator", "Branch Manager"],
+    
   },
   {
     id: "156",
@@ -93,6 +93,13 @@ export const publicRoutes = [
     id: "157",
     path: route.stock,
     element: <StockMovementsList/>,
+    route: Route,
+    meta_title: "Stock ",
+  },
+  {
+    id: "157",
+    path: route.store,
+    element: <Store/>,
     route: Route,
     meta_title: "Stock ",
   },
@@ -110,17 +117,10 @@ export const publicRoutes = [
    element: <DynamicDashboardWrapper />,
     route: Route,
     meta_title: "Dashboard",
-    roles: ["agent", "Branch Manager", "administrator"],
+   
   },
   
-  {
-    id: "202",
-    path: route.sourcesDashboard,
-    element: <SourcesDashboard/>,
-    route: Route,
-    meta_title: "Sources Dashboard",
-     roles: ["Branch Manager", "administrator"],
-  },
+ 
   
   {
     id: "203",
@@ -128,7 +128,7 @@ export const publicRoutes = [
     element: <ProductsList />,
     route: Route,
     meta_title: "Products",
-    roles: ["Branch Manager", "administrator","cashier"],
+   
   },
   {
     id: "204",
@@ -136,7 +136,7 @@ export const publicRoutes = [
     element: <ProductDetail />,
     route: Route,
     meta_title: "Product Detail",
-    roles: ["Branch Manager", "administrator",  "cashier"],
+   
   },
  
   
@@ -155,7 +155,7 @@ export const publicRoutes = [
     element: <AdminDashboard />,
     route: Route,
     meta_title: "Admin Dashboard",
-    roles: ["administrator"],
+    
   },
    {
     id: "212",
@@ -163,7 +163,7 @@ export const publicRoutes = [
     element: <BranchesList />,
     route: Route,
     meta_title: "Branches",
-    roles: ["administrator"],
+    
   },
   {
     id: "212",
@@ -171,7 +171,7 @@ export const publicRoutes = [
     element: <PrescriptionsList />,
     route: Route,
     meta_title: "Prescriptions",
-    roles: ["administrator"],
+    
   },
   {
     id: "212",
@@ -179,7 +179,7 @@ export const publicRoutes = [
     element: < SalesInvoicesList/>,
     route: Route,
     meta_title: "Invoices",
-    roles: ["administrator"],
+    
   },
    {
     id: "212",
@@ -187,32 +187,65 @@ export const publicRoutes = [
     element: <EmployeesList />,
     route: Route,
     meta_title: "Employees",
-    roles: ["administrator"],
+    
   },
   {
     id: "213",
     path: route.compliance,
     element: <ComplianceList />,
     route: Route,
-    meta_title: "Employees",
-    roles: ["administrator"],
+    meta_title: "Compliance",
+   
   },
   {
     id: "214",
     path: route.salaries,
     element: <SalariesList />,
     route: Route,
-    meta_title: "Employees",
-    roles: ["administrator"],
+    meta_title: "Salaries",
+   
   },
   {
-    id: "214",
+    id: "215",
     path: route.cheques,
     element: <ChequesList />,
     route: Route,
-    meta_title: "Employees",
-    roles: ["administrator"],
+    meta_title: "Cheques",
+    
   },
+  {
+    id: "216",
+    path: route.suppliers,
+    element: <SupplierList />,
+    route: Route,
+    meta_title: "Suppliers",
+    
+  },
+  {
+    id: "217",
+    path: route.cashier,
+    element: <CashierRecords />,
+    route: Route,
+    meta_title: "Cashier Records",
+    
+  },
+  {
+    id: "218",
+    path: route.permissions,
+    element: <MenuAccess />,
+    route: Route,
+    meta_title: "Permissions",
+    
+  },
+  {
+    id: "218",
+    path: route.reports,
+    element: <Reports />,
+    route: Route,
+    meta_title: "Reports",
+    
+  },
+
 ];
 
 export const authRoutes = [

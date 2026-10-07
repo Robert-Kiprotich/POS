@@ -112,8 +112,9 @@ function exportCSV(customers: any[]) {
 
     if (sales.length === 0) {
       rows.push({
-        customer: customer.name,
+        business_name: customer.business_name || "",
         phone: customer.phone || "",
+        alt_phone: customer.alt_phone || "",
         email: customer.email || "",
         order_number: "",
         sale_type: "",
@@ -143,7 +144,9 @@ function exportCSV(customers: any[]) {
 
   const headers = [
     "Customer",
+    "Business Name",
     "Phone",
+    "Alternative Phone",
     "Email",
     "Order Number",
     "Sale Type",
@@ -158,7 +161,9 @@ function exportCSV(customers: any[]) {
     ...rows.map((row) =>
       [
         row.customer,
+        row.business_name,
         row.phone,
+        row.alt_phone,
         row.email,
         row.order_number,
         row.sale_type,
@@ -200,7 +205,9 @@ function exportExcel(customers: any[]) {
     if (sales.length === 0) {
       rows.push({
         Customer: customer.name,
+               "Business Name": customer.business_name || "",
         Phone: customer.phone || "",
+        "Alternative Phone": customer.alt_phone || "",
         Email: customer.email || "",
         "Order Number": "",
         "Sale Type": "",
@@ -304,11 +311,12 @@ export default function CustomersList() {
       const q = search.toLowerCase();
 
       list = list.filter((c) => {
-        const customerMatch =
+               const customerMatch =
           (c.name || "").toLowerCase().includes(q) ||
+          (c.business_name || "").toLowerCase().includes(q) ||
           (c.phone || "").includes(q) ||
+          (c.alt_phone || "").includes(q) ||
           (c.email || "").toLowerCase().includes(q);
-
         const sales = getCustomerSales(c);
 
         const saleMatch = sales.some((sale: any) => {
@@ -648,10 +656,11 @@ export default function CustomersList() {
 
                     <tr>
 
-                      <th>Customer</th>
+                                           <th>Customer</th>
+
+                      <th>Business</th>
 
                       <th>Phone</th>
-
                       <th>Invoice</th>
 
                       <th>Sale Type</th>
@@ -723,17 +732,18 @@ export default function CustomersList() {
 
 
                           {/* PHONE */}
-
-                          <td className="text-nowrap">
-
-                            {customer.phone || (
-                              <span className="text-muted">
-                                —
-                              </span>
+ <td className="text-nowrap">
+                            {customer.business_name || (
+                              <span className="text-muted">—</span>
                             )}
-
                           </td>
-
+                                        {customer.phone || (
+                              <span className="text-muted">—</span>
+                            )}
+                            {customer.alt_phone && (
+                              <div className="text-muted fs-11">{customer.alt_phone}</div>
+                            )}
+                            
 
                           {/* INVOICE */}
 

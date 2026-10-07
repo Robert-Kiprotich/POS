@@ -6,7 +6,10 @@ function fmtDate(iso: string) {
   if (!iso) return "";
   return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
-
+function money(n: number) {
+  if (isNaN(n)) return "0.00";
+  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 const MOVEMENT_CLS: Record<string, string> = {
   restock:    "badge bg-success-transparent text-success",
   sale:       "badge bg-danger-transparent text-danger",
@@ -24,7 +27,7 @@ const MOVEMENT_LABELS: Record<string, string> = {
   return: "Returned",
   damaged: "Damaged",
   expired: "Expired",
-  transfer: "Moved to Branch",
+  transfer: "Move to Branch",
 };
 
 // Movement types selectable from the "Record Movement" offcanvas.
@@ -32,14 +35,14 @@ const MOVEMENT_LABELS: Record<string, string> = {
 const RECORDABLE_TYPES = ["damaged", "expired", "return", "adjustment", "restock", "transfer"];
 // Which fields each movement type shows in the offcanvas.
 const TYPE_FIELDS: Record<string, {
-  toBranch?: boolean; prices?: boolean; direction?: boolean; hint: string;
+  toBranch?: boolean; direction?: boolean; fee?: boolean; hint: string;
 }> = {
   restock:    { hint: "Add new stock to a branch." },
   damaged:    { hint: "Removes damaged units from the branch's stock." },
   expired:    { hint: "Removes expired units from the branch's stock." },
   return:     { hint: "Adds returned units back to the branch's stock." },
-  adjustment: { prices: true, direction: true, hint: "Correct stock count and/or update this branch's prices." },
-  transfer:   { toBranch: true, prices: true, hint: "Move stock between branches. Set the selling prices at the destination branch." },
+  adjustment: { direction: true, hint: "Correct the stock count for a branch." },
+  transfer:   { toBranch: true, fee: true, hint: "Move stock between branches at the same price. A per-unit movement fee is charged to Head Office." },
 };
 const COLUMNS = [
   { key: "product_name",     label: "Product" },
@@ -50,6 +53,8 @@ const COLUMNS = [
   { key: "note",             label: "Note" },
   { key: "created_by",       label: "By (User ID)" },
   { key: "created_at",       label: "Date" },
+  { key: "destination_branch_name", label: "Moved To" },
+  { key: "total_fee",        label: "Movement Fee" },
 ] as const;
 
 function exportCSV(rows: any[]) {
@@ -98,15 +103,14 @@ export default function StoreList() {
   const [pricesTouched, setPricesTouched] = useState(false);
   
 
-  const emptyForm = {
+    const emptyForm = {
     movement_type: "damaged",
     product: "",
     branch: "",
     to_branch: "",
     quantity: "",
-    direction: "increase",   // adjustment only: increase | decrease
-    retail_price: "",
-    wholesale_price: "",
+    direction: "increase",
+    movement_fee: "",
     note: "",
   };
   const [form, setForm] = useState(emptyForm);
@@ -170,7 +174,7 @@ export default function StoreList() {
   
   function openOffcanvas() {
   setForm(emptyForm);
-  setPricesTouched(false);
+  
   setFormError("");
   setShowOffcanvas(true);
 }
@@ -185,30 +189,11 @@ export default function StoreList() {
   const isTransfer = form.movement_type === "transfer";
   const isAdjustment = form.movement_type === "adjustment";
   const selectedProduct = products.find((p: any) => String(p.id) === String(form.product));
-
-  // Pre-fill prices: branch-specific price if it exists, otherwise the product's default.
-  const priceBranch = isTransfer ? form.to_branch : form.branch;
-  useEffect(() => {
-   if (!cfg?.prices || !form.product || pricesTouched) return;
-    let cancelled = false;
-    (async () => {
-      let retail = selectedProduct?.retail_price ?? "";
-      let wholesale = selectedProduct?.wholesale_price ?? "";
-      if (priceBranch) {
-        try {
-          const res = await API.get("branch-stocks/", { params: { branch: priceBranch, product: form.product } });
-          const rows = res.data?.results || (Array.isArray(res.data) ? res.data : []);
-          if (rows[0]) {
-            retail = rows[0].effective_retail_price ?? retail;
-            wholesale = rows[0].effective_wholesale_price ?? wholesale;
-          }
-        } catch { /* fall back to product prices */ }
-      }
-      if (!cancelled) setForm(f => ({ ...f, retail_price: String(retail ?? ""), wholesale_price: String(wholesale ?? "") }));
-    })();
-    return () => { cancelled = true; };
-  }, [form.product, priceBranch, form.movement_type, pricesTouched]); // eslint-disable-line react-hooks/exhaustive-deps
-
+  const costPrice = Number(selectedProduct?.cost_price || 0);
+  const retailPrice = Number(selectedProduct?.retail_price || 0);
+  const qtyNum = Number(form.quantity || 0);
+  const feeNum = Number(form.movement_fee || 0);
+ 
     const REDUCING_TYPES = new Set(["damaged", "expired"]);
   const ADDING_TYPES = new Set(["restock", "return"]);
 
@@ -219,16 +204,13 @@ export default function StoreList() {
     if (!form.branch) return setFormError(isTransfer ? "Please select the source branch." : "Please select a branch.");
     if (isTransfer && !form.to_branch) return setFormError("Please select the destination branch.");
     if (isTransfer && form.branch === form.to_branch) return setFormError("Source and destination branches must be different.");
+     if (isTransfer && Number(form.movement_fee || 0) < 0)
+      return setFormError("Movement fee cannot be negative.");
 
     const qty = Number(form.quantity || 0);
-    // Adjustments may be price-only (qty 0); everything else needs a quantity.
-    if (!isAdjustment && (!qty || qty <= 0)) return setFormError("Please enter a quantity greater than zero.");
-    if (isAdjustment && qty < 0) return setFormError("Quantity cannot be negative.");
-    if (isAdjustment && !qty && !form.retail_price && !form.wholesale_price)
-      return setFormError("Enter a quantity or a new price.");
-    if (cfg.prices && (Number(form.retail_price) < 0 || Number(form.wholesale_price) < 0))
-      return setFormError("Prices cannot be negative.");
-
+    if (!qty || qty <= 0) return setFormError("Please enter a quantity greater than zero.");
+   if (isTransfer && Number(form.movement_fee || 0) < 0)
+ return setFormError("Movement fee cannot be negative.");
     setSaving(true);
     try {
       if (isTransfer) {
@@ -237,8 +219,8 @@ export default function StoreList() {
           from_branch: form.branch,
           to_branch: form.to_branch,
           quantity: qty,
-          retail_price: form.retail_price || null,
-          wholesale_price: form.wholesale_price || null,
+         
+          movement_fee: form.movement_fee || null,
           note: form.note,
         });
       } else if (isAdjustment) {
@@ -246,8 +228,7 @@ export default function StoreList() {
           product: form.product,
           branch: form.branch,
           quantity_change: form.direction === "decrease" ? -qty : qty,
-          retail_price: form.retail_price || null,
-          wholesale_price: form.wholesale_price || null,
+          
           note: form.note,
         });
       } else {
@@ -296,7 +277,7 @@ export default function StoreList() {
               <i className="ti ti-table me-1" />Excel
             </button>
             <button className="btn btn-primary btn-sm" onClick={openOffcanvas}>
-              <i className="ti ti-plus me-1" />Record Movement
+              <i className="ti ti-plus me-1" />Manage Stock
             </button>
           </div>
         </div>
@@ -451,14 +432,13 @@ export default function StoreList() {
   className="form-select"
   value={form.movement_type}
   onChange={e => {
-    setPricesTouched(false);
+   
     setForm(f => ({
       ...f,
       movement_type: e.target.value,
       to_branch: "",
       direction: "increase",
-      retail_price: "",
-      wholesale_price: "",
+      
     }));
   }}
 >
@@ -470,10 +450,7 @@ export default function StoreList() {
                 <select
   className="form-select"
   value={form.product}
-  onChange={e => {
-    setPricesTouched(false);
-    setForm(f => ({ ...f, product: e.target.value }));
-  }}
+  onChange={e => setForm(f => ({ ...f, product: e.target.value }))}
 >
   <option value="">Select product…</option>
   {products.map((p: any) => (
@@ -516,48 +493,48 @@ export default function StoreList() {
               )}
 
               <div className="mb-3">
-                <label className="form-label fs-13 fw-medium">
-                  Quantity{isAdjustment && <span className="text-muted fw-normal"> (leave 0 for price-only change)</span>}
-                </label>
-                <input type="number" min={isAdjustment ? 0 : 1} className="form-control"
-                  value={form.quantity}
-                  onChange={e => setForm(f => ({ ...f, quantity: e.target.value }))}
-                  placeholder="e.g. 5" />
+                <label className="form-label fs-13 fw-medium">Quantity</label>
++ <input type="number" min={1} className="form-control"
+    value={form.quantity}
+    onChange={e => setForm(f => ({ ...f, quantity: e.target.value }))}
+    placeholder="e.g. 5" />
               </div>
+              {cfg.fee && (
+                <div className="mb-3">
+                  {selectedProduct ? (
+                    <div className="border rounded p-2 mb-2 fs-12 bg-light">
+                      <div className="d-flex justify-content-between">
+                        <span className="text-muted">Buying price (per unit)</span>
+                        <strong>{costPrice > 0 ? money(costPrice) : "Not set"}</strong>
+                      </div>
+                      <div className="d-flex justify-content-between">
+                        <span className="text-muted"> Retail price</span>
+                        <span>{money(retailPrice)}</span>
+                      </div>
+                     
+                      {costPrice <= 0 && (
+                        <div className="text-warning mt-1">
+                          No buying price is saved for this product. Set it on the Products page.
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="form-text fs-12 mb-2">Select a product to see its buying price.</div>
+                  )}
 
-              {cfg.prices && (
-  <div className="row g-2 mb-3">
-    <div className="col-6">
-      <label className="form-label fs-13 fw-medium">
-        Retail Price{isTransfer ? " (destination)" : ""}
-      </label>
-      <input
-        type="number" min={0} step="0.01" className="form-control"
-        value={form.retail_price}
-        onChange={e => {
-          setPricesTouched(true);
-          setForm(f => ({ ...f, retail_price: e.target.value }));
-        }}
-      />
-    </div>
-    <div className="col-6">
-      <label className="form-label fs-13 fw-medium">
-        Wholesale Price{isTransfer ? " (destination)" : ""}
-      </label>
-      <input
-        type="number" min={0} step="0.01" className="form-control"
-        value={form.wholesale_price}
-        onChange={e => {
-          setPricesTouched(true);
-          setForm(f => ({ ...f, wholesale_price: e.target.value }));
-        }}
-      />
-    </div>
-    <div className="col-12 form-text fs-12">
-      Pre-filled with the current price for that branch. Change it to set a branch-specific price.
-    </div>
-  </div>
-)}
+                  <label className="form-label fs-13 fw-medium">Movement Fee (per unit)</label>
+                  <input type="number" min={0} step="0.01" className="form-control"
+                    value={form.movement_fee}
+                    onChange={e => setForm(f => ({ ...f, movement_fee: e.target.value }))}
+                    placeholder="e.g. 10" />
+                  <div className="form-text fs-12">
+                    Total fee: <strong>{money(feeNum * qtyNum)}</strong> (credited to Head Office)
+              
+                  </div>
+                </div>
+              )}
+
+ 
 
               <div className="mb-3">
                 <label className="form-label fs-13 fw-medium">Note</label>

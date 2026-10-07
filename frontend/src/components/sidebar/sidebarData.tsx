@@ -3,9 +3,11 @@ import { all_routes } from "../../routes/all_routes";
 const route = all_routes;
 
 const ADMIN = "administrator";
-const MANAGER = "branch manager";
+const MANAGER = "Branch Manager";
 const CLERK = "sales clerk";
 const KEEPER = "store keeper";
+const CASHIER = "cashier";
+const VET = "veterinarian";
 
 
 export const SidebarData = [
@@ -16,52 +18,57 @@ export const SidebarData = [
     separateRoute: false,
     submenuItems: [
       {
-        label: "Dashboard", link: route.dashboard, submenu: false, showSubRoute: false,
+        key: "dashboard", label: "Dashboard", link: route.dashboard, submenu: false, showSubRoute: false,
         icon: "dashboard", base: "dashboard", materialicons: "start", dot: false,
         roles: [CLERK, KEEPER], submenuItems: [],
       },
       {
-        label: "Dashboard", link: route.supervisorDashboard, submenu: false, showSubRoute: false,
-        icon: "dashboard", base: "supervisor-dashboard", materialicons: "start", dot: false,
-        roles: [MANAGER], submenuItems: [],
-      },
-      {
-        label: "Dashboard", link: route.adminDashboard, submenu: false, showSubRoute: false,
+        key: "admin_dashboard", label: "Dashboard", link: route.adminDashboard, submenu: false, showSubRoute: false,
         icon: "dashboard", base: "admin-dashboard", materialicons: "start", dot: false,
-        roles: [ADMIN], submenuItems: [],
+        roles: [ADMIN, MANAGER], submenuItems: [],
       },
       {
-        label: "POS", link: route.pos, submenu: false, showSubRoute: false,
+        key: "pos", label: "POS", link: route.pos, submenu: false, showSubRoute: false,
         icon: "phone", base: "calls", materialicons: "start", dot: false,
-        roles: [ADMIN, MANAGER, CLERK], submenuItems: [],
-      },
-       {
-        label: "Cashier Records", link: "", submenu: false, showSubRoute: false,
-        icon: "phone", base: "calls", materialicons: "start", dot: false,
-        roles: [ADMIN, MANAGER, CLERK], submenuItems: [],
+        roles: [ADMIN, MANAGER, CLERK, CASHIER], submenuItems: [],
       },
       {
-        label: "Products", link: route.products, submenu: false, showSubRoute: false,
+        key: "cashier_records", label: "Cashier Records", link: route.cashier, submenu: false, showSubRoute: false,
+        icon: "phone", base: "calls", materialicons: "start", dot: false,
+        roles: [ADMIN, MANAGER, CLERK, CASHIER], submenuItems: [],
+      },
+      {
+        key: "products", label: "Products", link: route.products, submenu: false, showSubRoute: false,
         icon: "briefcase", base: "cases", materialicons: "start", dot: false,
-        roles: [ADMIN, MANAGER, KEEPER], submenuItems: [],
+        roles: [ADMIN, MANAGER, KEEPER, VET], submenuItems: [],
       },
       {
-        label: "Categories", link: route.categories, submenu: false, showSubRoute: false,
+        key: "categories", label: "Categories", link: route.categories, submenu: false, showSubRoute: false,
         icon: "brand-stackshare", base: "sources", materialicons: "start", dot: false,
-        roles: [ADMIN, MANAGER, KEEPER], submenuItems: [],
+        roles: [ADMIN, MANAGER, KEEPER, VET], submenuItems: [],
       },
       {
-        label: "Customers", link: route.customers, submenu: false, showSubRoute: false,
+        key: "customers", label: "Customers", link: route.customers, submenu: false, showSubRoute: false,
         icon: "report", base: "quality-analysis", materialicons: "start", dot: false,
         roles: [ADMIN, MANAGER, CLERK], submenuItems: [],
       },
       {
-        label: "Prescriptions", link: route.prescriptions, submenu: false, showSubRoute: false,
+        key: "prescriptions", label: "Prescriptions", link: route.prescriptions, submenu: false, showSubRoute: false,
         icon: "report", base: "quality-analysis", materialicons: "start", dot: false,
+        roles: [ADMIN, MANAGER, CLERK,VET], submenuItems: [],
+      },
+      {
+        key: "sales", label: "Sales", link: route.sales, submenu: false, showSubRoute: false,
+        icon: "category", base: "sales", materialicons: "start", dot: false,
         roles: [ADMIN, MANAGER, CLERK], submenuItems: [],
       },
       {
-        label: "Sales", link: route.sales, submenu: false, showSubRoute: false,
+        key: "suppliers", label: "Suppliers", link: route.suppliers, submenu: false, showSubRoute: false,
+        icon: "category", base: "sales", materialicons: "start", dot: false,
+        roles: [ADMIN, MANAGER, CLERK], submenuItems: [],
+      },
+      {
+        key: "payments", label: "Payments", link: route.payments, submenu: false, showSubRoute: false,
         icon: "category", base: "sales", materialicons: "start", dot: false,
         roles: [ADMIN, MANAGER, CLERK], submenuItems: [],
       },
@@ -70,14 +77,21 @@ export const SidebarData = [
         icon: "category", base: "sales", materialicons: "start", dot: false,
         submenuItems: [
           {
-            label: "Stock Management", link: route.stock, submenu: false, showSubRoute: false,
+            key: "stock_management", label: "Stock Management", link: route.stock, submenu: false, showSubRoute: false,
             icon: "clipboard-list", base: "system-logs", materialicons: "start", dot: false,
             roles: [ADMIN, MANAGER, KEEPER], submenuItems: [],
           },
+          {
+            key: "store", label: "Store", link: route.store, submenu: false, showSubRoute: false,
+            icon: "clipboard-list", base: "system-logs", materialicons: "start", dot: false,
+            roles: [ADMIN, MANAGER, KEEPER], submenuItems: [],
+          },
+
+
         ],
       },
       {
-        label: "Invoices", link: route.invoices, submenu: false, showSubRoute: false,
+        key: "invoices", label: "Invoices", link: route.invoices, submenu: false, showSubRoute: false,
         icon: "users", base: "users", materialicons: "start", dot: false,
         roles: [ADMIN, MANAGER], submenuItems: [],
       },
@@ -96,34 +110,40 @@ export const SidebarData = [
         roles: [ADMIN],
         submenuItems: [
           {
-            label: "Branches", link: route.branches, submenu: false, showSubRoute: false,
+            key: "branches", label: "Branches", link: route.branches, submenu: false, showSubRoute: false,
             icon: "users", base: "users", materialicons: "start", dot: false,
             roles: [ADMIN], submenuItems: [],
           },
           {
-            label: "Staff", link: route.employees, submenu: false, showSubRoute: false,
+            key: "staff", label: "Staff", link: route.employees, submenu: false, showSubRoute: false,
             icon: "clipboard-list", base: "system-logs", materialicons: "start", dot: false,
             roles: [ADMIN], submenuItems: [],
           },
           {
-            label: "Users", link: route.users, submenu: false, showSubRoute: false,
+            key: "users", label: "Users", link: route.users, submenu: false, showSubRoute: false,
             icon: "clipboard-list", base: "system-logs", materialicons: "start", dot: false,
             roles: [ADMIN], submenuItems: [],
+          },
+          {
+            // Add `menuAccess: "/menu-access"` (or similar) to all_routes and register the page in your router.
+            key: "access_control", label: "Access Control", link: route.permissions, submenu: false, showSubRoute: false,
+            icon: "clipboard-list", base: "menu-access", materialicons: "start", dot: false,
+            roles: [ADMIN], adminOnly: true, submenuItems: [],
           },
         ],
       },
       {
-        label: "Salaries", link: route.salaries, submenu: false, showSubRoute: false,
+        key: "salaries", label: "Salaries", link: route.salaries, submenu: false, showSubRoute: false,
         icon: "users", base: "users", materialicons: "start", dot: false,
         roles: [ADMIN], submenuItems: [],
       },
       {
-        label: "Compliance Records", link: route.compliance, submenu: false, showSubRoute: false,
+        key: "compliance", label: "Compliance Records", link: route.compliance, submenu: false, showSubRoute: false,
         icon: "users", base: "users", materialicons: "start", dot: false,
         roles: [ADMIN], submenuItems: [],
       },
       {
-        label: "Cheque Deposits", link: route.cheques, submenu: false, showSubRoute: false,
+        key: "cheques", label: "Cheque Deposits", link: route.cheques, submenu: false, showSubRoute: false,
         icon: "users", base: "users", materialicons: "start", dot: false,
         roles: [ADMIN], submenuItems: [],
       },
@@ -137,15 +157,11 @@ export const SidebarData = [
     separateRoute: false,
     submenuItems: [
       {
-        label: "Sales Reports", link: route.caseReports, submenu: false, showSubRoute: false,
+        key: "sales_reports", label: "Reports", link: route.reports, submenu: false, showSubRoute: false,
         icon: "chart-histogram", base: "case-reports", materialicons: "start", dot: false,
         roles: [ADMIN, MANAGER], submenuItems: [],
       },
-      {
-        label: "Payment Reports", link: route.callsReports, submenu: false, showSubRoute: false,
-        icon: "headset", base: "call-reports", materialicons: "start", dot: false,
-        roles: [ADMIN, MANAGER], submenuItems: [],
-      },
+      
     ],
   },
 ];

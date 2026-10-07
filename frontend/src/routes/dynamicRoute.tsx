@@ -54,7 +54,7 @@ const DynamicDashboardWrapper = () => {
     case ROLES.SALES_CLERK:
     case ROLES.STORE_KEEPER:
     default:
-      return <ClerkDashboard />;
+      return <MainDashboard />;
   }
 };
 

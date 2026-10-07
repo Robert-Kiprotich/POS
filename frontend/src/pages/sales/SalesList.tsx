@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import API from "../../services/api";
 import { all_routes } from "../../routes/all_routes";
 import SaleDetailOffcanvas from "./SalesDetail";
+import { useBranchAccess } from "../../hooks/useBranchAccess";
 
 
 const route = all_routes;
@@ -31,6 +32,7 @@ const COLUMNS = [
   { key: "order_number",  label: "Order #" },
   { key: "customer_name", label: "Customer" },
   { key: "cashier_name",  label: "Cashier" },
+    { key: "branch_name",   label: "Branch" },
   { key: "status",        label: "Status" },
    { key: "sale_type",     label: "Sale Type" },
   { key: "total_amount",  label: "Total" },
@@ -75,18 +77,32 @@ export default function SalesList() {
   const [page, setPage]         = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [openId, setOpenId] = useState<string | number | null>(null);
+    const { isHO, branches } = useBranchAccess();
+  const [branchFilter, setBranchFilter] = useState("");
+  const [byBranch, setByBranch] = useState<any[]>([]);
 
-  const load = useCallback(async () => {
+    const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await API.get("sales/");
+      const params: any = { page_size: 1000 };
+      if (branchFilter) params.branch = branchFilter;
+      const res = await API.get("sales/", { params });
       const raw: any[] = res.data?.results || res.data?.data || (Array.isArray(res.data) ? res.data : []);
       setSales(raw);
+
+      if (isHO && !branchFilter) {
+        const bb = await API.get("sales/by_branch/", {
+          params: { date_from: dateFrom || undefined, date_to: dateTo || undefined },
+        });
+        setByBranch(bb.data?.branches || []);
+      } else {
+        setByBranch([]);
+      }
     } catch (err: any) {
       if (err.response?.status === 401) window.location.href = "/login";
       else console.error("Error loading sales:", err);
     } finally { setLoading(false); }
-  }, []);
+  }, [branchFilter, isHO, dateFrom, dateTo]);
 const totalProfit = sales
   .filter(x => x.status !== "cancelled")
   .reduce((s, x) => s + (parseFloat(x.profit) || 0), 0);
@@ -169,7 +185,24 @@ const totalProfit = sales
             </div>
           );
         })()}
-
+          {isHO && !branchFilter && byBranch.length > 0 && (
+          <div className="row g-3 mb-4">
+            {byBranch.map(b => (
+              <div key={b.branch} className="col-6 col-md-4 col-xl-3">
+                <div className="card mb-0 shadow-none border h-100" style={{ cursor: "pointer" }}
+                  onClick={() => setBranchFilter(String(b.branch))}>
+                  <div className="card-body p-3">
+                    <p className="fw-medium mb-1 fs-13">{b.branch_name}</p>
+                    <h5 className="mb-0 text-success">{money(b.total_revenue)}</h5>
+                    <small className="text-muted">
+                      {b.sales_count} sale{b.sales_count !== 1 ? "s" : ""} · owing {money(b.outstanding)}
+                    </small>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="card shadow-none border">
           <div className="card-header border-bottom py-3 d-flex align-items-center justify-content-between flex-wrap gap-2">
             <div className="input-group input-group-flat" style={{ maxWidth: 260 }}>
@@ -178,6 +211,14 @@ const totalProfit = sales
                 value={search} onChange={e => setSearch(e.target.value)} />
               {search && <button className="btn btn-sm btn-link text-muted px-2" onClick={() => setSearch("")}><i className="ti ti-x" /></button>}
             </div>
+
+                          {isHO && (
+                <select className="form-select form-select-sm fs-13" style={{ width: 160 }}
+                  value={branchFilter} onChange={e => setBranchFilter(e.target.value)}>
+                  <option value="">All branches</option>
+                  {branches.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              )}
             <div className="d-flex gap-2 align-items-center flex-wrap">
               <select className="form-select form-select-sm fs-13" style={{ width: 150 }} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
                 <option value="all">All statuses</option>
@@ -221,6 +262,7 @@ const totalProfit = sales
 </td>
                         <td className="text-nowrap">{s.customer_name || <span className="text-muted">Walk-in</span>}</td>
                         <td className="text-nowrap">{s.cashier_name || <span className="text-muted">—</span>}</td>
+                                                <td className="text-nowrap">{s.branch_name || <span className="text-muted">—</span>}</td>
                         <td>
                           <span className={STATUS_CLS[s.status] || "badge bg-secondary-transparent text-secondary"} style={{ textTransform: "capitalize" }}>
                             {s.status || "—"}

@@ -4,7 +4,10 @@ from django.db import models
 from django.utils import timezone
 import uuid
 from django.core.validators import FileExtensionValidator
-
+from decimal import Decimal
+from django.db.models import Sum
+from django.db.models.functions import Coalesce
+from django.db.models import OuterRef, Subquery
 
 def compliance_upload_path(instance, filename):
     return f"compliance/{instance.document_type}/{uuid.uuid4().hex[:8]}_{filename}"
@@ -109,7 +112,9 @@ class BranchStock(models.Model):
 
 class Customer(models.Model):
     name = models.CharField(max_length=150)
+    business_name = models.CharField(max_length=150, blank=True, default="")
     phone = models.CharField(max_length=32, blank=True, default="")
+    alt_phone = models.CharField("Alternative phone", max_length=32, blank=True, default="")
     email = models.EmailField(blank=True, default="")
     address = models.CharField(max_length=255, blank=True, default="")
     loyalty_points = models.PositiveIntegerField(default=0)
@@ -119,8 +124,7 @@ class Customer(models.Model):
         ordering = ["name"]
 
     def __str__(self):
-        return self.name
-
+        return f"{self.name} ({self.business_name})" if self.business_name else self.name
 
 class Sale(models.Model):
     class Status(models.TextChoices):
@@ -249,6 +253,18 @@ class StockMovement(models.Model):
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, related_name="stock_movements", null=True, on_delete=models.SET_NULL
     )
+    movement_fee = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0, validators=[MinValueValidator(0)],
+        help_text="Fee per unit charged on a branch transfer (multiplied by quantity).",
+    )
+    fee_branch = models.ForeignKey(
+        Branch, related_name="movement_fees", null=True, blank=True, on_delete=models.SET_NULL,
+        help_text="Branch the movement fee belongs to (always Head Office).",
+    )
+
+    @property
+    def total_fee(self):
+        return (self.movement_fee or 0) * abs(self.quantity_change)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -336,6 +352,10 @@ class SalesInvoice(models.Model):
     sale = models.OneToOneField(
         Sale, on_delete=models.CASCADE, related_name="invoice",null=True, blank=True,
     )
+    supplier = models.ForeignKey(
+        "Supplier", related_name="purchase_invoices", null=True, blank=True,
+        on_delete=models.PROTECT, help_text="Set on purchase invoices (bills from a supplier).",
+    )
     extra_data = models.JSONField(default=dict, blank=True)
     status = models.CharField(
         max_length=15, choices=Status.choices, default=Status.DRAFT
@@ -387,7 +407,25 @@ class SalesInvoice(models.Model):
             self.total_amount = (self.subtotal or 0) - (self.discount_amount or 0) + (self.tax_amount or 0)
             self.balance_due = self.total_amount - (self.amount_paid or 0)
         super().save(*args, **kwargs)
+    @property
+    def payment_status(self):
+        total, paid = self.total_amount or 0, self.amount_paid or 0
+        if paid <= 0:
+            return "not_paid"
+        return "paid" if paid >= total else "partial"
 
+    def sync_from_payments(self):
+        """Recalculate amount paid and status from linked, non-cancelled business payments."""
+        paid = self.payments_made.filter(status="paid").aggregate(
+            t=Coalesce(Sum("amount"), Decimal("0.00")))["t"]
+        total = (self.subtotal or 0) - (self.discount_amount or 0) + (self.tax_amount or 0)
+        self.amount_paid = paid
+        if self.status != self.Status.CANCELLED:
+            if paid <= 0 and self.status in (self.Status.PAID, self.Status.PARTIAL):
+                self.status = self.Status.ISSUED
+            elif paid > 0:
+                self.status = self.Status.PAID if paid >= total else self.Status.PARTIAL
+        self.save()
 class Employee(models.Model):
     class EmploymentType(models.TextChoices):
         FULL_TIME = "full_time", "Full-Time"
@@ -737,3 +775,203 @@ class ChequeDeposit(models.Model):
         limit = self.cheque_date + timedelta(days=183)
         return self.status in (self.Status.RECEIVED, self.Status.DEPOSITED) and limit < timezone.localdate()
 
+class Supplier(models.Model):
+    class PaymentTerms(models.TextChoices):
+        CASH = "cash", "Cash on delivery"
+        NET_7 = "net_7", "Next 7 days"
+        NET_14 = "net_14", "Next 14 days"
+        NET_30 = "net_30", "Next 30 days"
+        NET_60 = "net_60", "Next 60 days"
+
+    name = models.CharField(max_length=150, unique=True)
+    contact_person = models.CharField(max_length=150, blank=True, default="")
+    phone = models.CharField(max_length=32, blank=True, default="")
+    alt_phone = models.CharField(max_length=32, blank=True, default="")
+    email = models.EmailField(blank=True, default="")
+    address = models.CharField(max_length=255, blank=True, default="")
+    kra_pin = models.CharField("KRA PIN", max_length=50, blank=True, default="")
+    bank_name = models.CharField(max_length=100, blank=True, default="")
+    bank_account = models.CharField(max_length=50, blank=True, default="")
+    payment_terms = models.CharField(
+        max_length=10, choices=PaymentTerms.choices, default=PaymentTerms.CASH
+    )
+    notes = models.TextField(blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+class PettyCashExpense(models.Model):
+    """Small cash spent out of the till (transport, cleaning, airtime...)."""
+
+    class Category(models.TextChoices):
+        TRANSPORT = "transport", "Transport"
+        MEALS = "meals", "Meals & Refreshments"
+        CLEANING = "cleaning", "Cleaning Supplies"
+        STATIONERY = "stationery", "Stationery & Packaging"
+        UTILITIES = "utilities", "Airtime / Utilities"
+        REPAIRS = "repairs", "Repairs & Maintenance"
+        OTHER = "other", "Other"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"        # cashier recorded it; still editable
+        APPROVED = "approved", "Approved"     # admin confirmed; locked
+        REJECTED = "rejected", "Rejected"     # admin refused; doesn't count against the till
+
+    branch = models.ForeignKey(Branch, related_name="petty_cash", null=True, blank=True, on_delete=models.SET_NULL)
+    cashier = models.ForeignKey(
+        settings.AUTH_USER_MODEL, related_name="petty_cash_expenses", null=True, on_delete=models.SET_NULL
+    )
+    category = models.CharField(max_length=20, choices=Category.choices, default=Category.OTHER)
+    description = models.CharField(max_length=255)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(0)])
+    expense_date = models.DateField(default=timezone.localdate)
+    receipt_number = models.CharField(max_length=50, blank=True, default="")
+    receipt_image = models.ImageField(upload_to="petty_cash/%Y/%m/", null=True, blank=True)
+
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, related_name="petty_cash_reviewed", null=True, blank=True, on_delete=models.SET_NULL
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.CharField(max_length=255, blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-expense_date", "-id"]
+        verbose_name = "Petty Cash Expense"
+        verbose_name_plural = "Petty Cash Expenses"
+
+    def __str__(self):
+        return f"{self.get_category_display()} - {self.amount} ({self.expense_date})"
+class RoleMenuPermission(models.Model):
+    role = models.OneToOneField("users.Roles", related_name="menu_permission", on_delete=models.CASCADE)
+    menu_keys = models.JSONField(default=list, blank=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, related_name="+", null=True, blank=True, on_delete=models.SET_NULL
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.role} -> {len(self.menu_keys)} menu items"
+
+class BusinessPayment(models.Model):
+    """Money paid out by the business: suppliers, rent, utilities, salaries, taxes, etc."""
+
+    class Category(models.TextChoices):
+        SUPPLIER = "supplier", "Supplier"
+        INVOICE = "invoice", "Invoice"
+        RENT = "rent", "Rent"
+        ELECTRICITY = "electricity", "Electricity"
+        SALARIES = "salaries", "Salaries"
+        CUSTOMS = "customs", "Customs"
+        COUNTY = "county_government", "County Government"
+        WATER = "water", "Water"
+        OTHER = "other", "Other Payment"
+
+    class Method(models.TextChoices):
+        CASH = "cash", "Cash"
+        MPESA = "mpesa", "M-Pesa"
+        BANK_TRANSFER = "bank_transfer", "Bank Transfer"
+        CHEQUE = "cheque", "Cheque"
+        CARD = "card", "Card"
+        OTHER = "other", "Other"
+
+    class Status(models.TextChoices):
+        PAID = "paid", "Paid"
+        CANCELLED = "cancelled", "Cancelled"
+
+    category = models.CharField(max_length=20, choices=Category.choices)
+    supplier = models.ForeignKey(
+        Supplier, related_name="business_payments", null=True, blank=True, on_delete=models.PROTECT
+    )
+    purchase_invoice = models.ForeignKey(
+        SalesInvoice, related_name="payments_made", null=True, blank=True, on_delete=models.PROTECT,
+        help_text="The supplier bill this payment settles (optional).",
+    )
+    payee = models.CharField(max_length=150, blank=True, default="",
+                             help_text="Who was paid (landlord, KPLC, KRA, county...). Optional for suppliers.")
+    branch = models.ForeignKey(Branch, related_name="business_payments", null=True, blank=True,
+                               on_delete=models.SET_NULL)
+    description = models.CharField(max_length=255, blank=True, default="")
+    amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(0)])
+    payment_date = models.DateField(default=timezone.localdate)
+    period = models.DateField(null=True, blank=True,
+                              help_text="First day of the month this payment covers (rent, utilities, salaries).")
+    method = models.CharField(max_length=20, choices=Method.choices, default=Method.CASH)
+    reference = models.CharField(max_length=100, blank=True, default="",
+                                 help_text="M-Pesa code, bank ref, cheque no.")
+    invoice_number = models.CharField(max_length=60, blank=True, default="",
+                                      help_text="Supplier / customs / county invoice or bill number")
+    attachment = models.FileField(upload_to="business_payments/%Y/%m/", null=True, blank=True)
+
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PAID)
+    cancel_reason = models.CharField(max_length=255, blank=True, default="")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, related_name="business_payments_created",
+        null=True, blank=True, on_delete=models.SET_NULL,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-payment_date", "-id"]
+        verbose_name = "Business Payment"
+        verbose_name_plural = "Business Payments"
+
+    def __str__(self):
+        return f"{self.get_category_display()} - {self.amount} ({self.payment_date})"
+
+
+class StoreStock(models.Model):
+    """Stock held in the central store (storeroom), before it is moved to Head Office."""
+    product = models.OneToOneField(Product, related_name="store_stock", on_delete=models.CASCADE)
+    quantity = models.IntegerField(default=0, validators=[MinValueValidator(0)])
+    reorder_level = models.IntegerField(default=5, help_text="Low-stock flag at/below this quantity")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["product__name"]
+        verbose_name = "Store Stock"
+        verbose_name_plural = "Store Stock"
+
+    def __str__(self):
+        return f"{self.product.name} @ Store: {self.quantity}"
+
+    @property
+    def is_low_stock(self):
+        return self.quantity <= self.reorder_level
+
+
+class StoreMovement(models.Model):
+    """History of everything that goes in or out of the store."""
+
+    class MovementType(models.TextChoices):
+        RECEIVED = "received", "Received into Store"
+        TO_HEAD_OFFICE = "to_head_office", "Moved to Head Office"
+        ADJUSTMENT = "adjustment", "Adjustment"
+        DAMAGED = "damaged", "Damaged"
+        EXPIRED = "expired", "Expired"
+
+    product = models.ForeignKey(Product, related_name="store_movements", on_delete=models.CASCADE)
+    movement_type = models.CharField(max_length=20, choices=MovementType.choices)
+    quantity_change = models.IntegerField(help_text="Positive adds to the store, negative removes")
+    balance_after = models.IntegerField(default=0, help_text="Store quantity after this movement")
+    note = models.CharField(max_length=255, blank=True, default="")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, related_name="store_movements", null=True, blank=True,
+        on_delete=models.SET_NULL,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self):
+        return f"{self.product.name}: {self.quantity_change:+d} ({self.movement_type})"

@@ -105,7 +105,166 @@ function exportExcel(rows: any[]) {
   XLSX.utils.book_append_sheet(wb, ws, "VetPrescriptions");
   XLSX.writeFile(wb, `veterinary_eprescriptions_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
+function esc(v: any) {
+  return String(v ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
 
+function printPrescription(item: any) {
+  const win = window.open("", "_blank", "width=900,height=1000");
+  if (!win) {
+    alert("Allow popups to print the prescription.");
+    return;
+  }
+
+  const val = (v: any) => (v ? esc(v) : "&mdash;");
+  const field = (label: string, value: any, wide = false) =>
+    `<div class="f${wide ? " wide" : ""}"><span class="l">${label}</span><span class="v">${val(value)}</span></div>`;
+  const section = (title: string, body: string) =>
+    `<div class="sec"><div class="sec-t">${title}</div><div class="grid">${body}</div></div>`;
+
+  const rxNo = `RX-${String(item.id).padStart(5, "0")}`;
+  const target = item.prescription_target_display || item.prescription_target;
+
+  const html = `
+<html>
+<head>
+  <title>Prescription ${rxNo}</title>
+  <style>
+    @page { size: A4 portrait; margin: 14mm; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body { font-family: "Segoe UI", Arial, sans-serif; font-size: 12px; color: #1f2937;
+           -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+    .head { display: flex; justify-content: space-between; align-items: flex-start;
+            border-bottom: 3px solid #E41F07; padding-bottom: 10px; margin-bottom: 14px; }
+    .biz h1 { margin: 0; font-size: 20px; letter-spacing: .5px; color: #E41F07; }
+    .biz p { margin: 2px 0 0; color: #6b7280; font-size: 11px; }
+    .rx { text-align: right; }
+    .rx .no { font-size: 15px; font-weight: 700; }
+    .rx .dt { color: #6b7280; font-size: 11px; margin-top: 2px; }
+
+    .title { text-align: center; margin: 4px 0 14px; }
+    .title h2 { margin: 0; font-size: 16px; text-transform: uppercase; letter-spacing: 2px; }
+    .title .sub { color: #6b7280; font-size: 11px; margin-top: 3px; }
+    .chips { display: flex; justify-content: center; gap: 8px; margin-top: 8px; }
+    .chip { padding: 3px 12px; border-radius: 999px; font-size: 11px; font-weight: 600;
+            border: 1px solid #d1d5db; background: #f9fafb; }
+    .chip.cat { background: #fff7ed; border-color: #fdba74; color: #c2410c; }
+
+    .sec { border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 10px;
+           overflow: hidden; page-break-inside: avoid; }
+    .sec-t { background: #f3f4f6; padding: 5px 10px; font-weight: 700; font-size: 11px;
+             text-transform: uppercase; letter-spacing: .8px; border-bottom: 1px solid #e5e7eb; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); }
+    .f { padding: 7px 10px; border-right: 1px solid #f0f0f0; border-bottom: 1px solid #f0f0f0; }
+    .f.wide { grid-column: span 3; border-right: 0; }
+    .l { display: block; font-size: 9.5px; color: #6b7280; text-transform: uppercase;
+         letter-spacing: .6px; margin-bottom: 2px; }
+    .v { display: block; font-weight: 600; min-height: 14px; white-space: pre-wrap; }
+
+    .warn { border: 1px solid #fca5a5; background: #fef2f2; }
+    .warn .sec-t { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
+
+    .sign { display: flex; gap: 30px; margin-top: 26px; page-break-inside: avoid; }
+    .sign > div { flex: 1; text-align: center; }
+    .sign .stamp-text { min-height: 40px; display: flex; align-items: flex-end;
+                        justify-content: center; font-style: italic; padding-bottom: 4px; }
+    .sign .line { border-top: 1px solid #111; padding-top: 4px; font-size: 11px; color: #4b5563; }
+
+    .foot { margin-top: 18px; padding-top: 8px; border-top: 1px dashed #d1d5db;
+            display: flex; justify-content: space-between; font-size: 10px; color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <div class="head">
+    <div class="biz">
+      <h1>SUPER KIMIA AGRO SOLUTIONS</h1>
+      <p>202202, Mpeketoni</p>
+      <p>Tel: 0722285664</p>
+    </div>
+    <div class="rx">
+      <div class="no">${rxNo}</div>
+      <div class="dt">Date: ${esc(fmtDate(item.date_of_prescription))}</div>
+    </div>
+  </div>
+
+  <div class="title">
+    <h2>Veterinary e-Prescription</h2>
+    <div class="sub">Prescription for veterinary drugs</div>
+    <div class="chips">
+      <span class="chip cat">Drug Category ${esc(item.drug_category)}</span>
+      <span class="chip">${esc(target)}</span>
+    </div>
+  </div>
+
+  ${section("Animal Details",
+    field("Species", item.animal_species) +
+    field("Breed", item.breed) +
+    field("Age", item.age))}
+
+  ${section("Medication Details",
+    field("Drug Trade Name", item.drug_trade_name) +
+    field("Manufacturer", item.manufacturer) +
+    field("Batch No.", item.batch_no) +
+    field("Quantity Purchased", item.quantity_purchased) +
+    field("Drug Volume", item.drug_volume) +
+    field("Expiry Date", item.expiry_date ? fmtDate(item.expiry_date) : "") +
+    field("Dosage", item.dosage, true))}
+
+  ${section("Treatment",
+    field("Clinical Use", item.clinical_use, true) +
+    field("Duration of Treatment", item.duration_of_treatment) +
+    field("Storage Condition", item.storage_condition) +
+    field("Side Effects", item.side_effect))}
+
+  <div class="sec warn">
+    <div class="sec-t">Withdrawal Period</div>
+    <div class="grid">${field("Do not slaughter / use produce before", item.withdrawal_period, true)}</div>
+  </div>
+
+  ${section("Buyer Credentials",
+    field("Name of Buyer", item.name_of_the_buyer) +
+    field("K.V.B No.", item.buyer_kvb_no) +
+    field("Licence No.", item.buyer_licence_no) +
+    field("Contact", item.buyer_contact, true))}
+
+  ${section("Vet / Pharmacist Comment", field("Comment", item.vet_pharmacist_comment, true))}
+
+  <div class="sign">
+    <div>
+      <div class="stamp-text">${item.signature_and_stamp ? esc(item.signature_and_stamp) : ""}</div>
+      <div class="line">Vet / Pharmacist signature &amp; stamp</div>
+    </div>
+    <div>
+      <div class="stamp-text"></div>
+      <div class="line">Buyer signature</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>${rxNo}</span>
+    <span>Printed ${esc(new Date().toLocaleString("en-GB"))}</span>
+  </div>
+</body>
+</html>`;
+
+  win.document.write(html);
+  win.document.close();
+
+  setTimeout(() => {
+    try {
+      win.focus();
+      win.print();
+    } catch (err) {
+      console.error("Print failed:", err);
+    } finally {
+      setTimeout(() => win.close(), 500);
+    }
+  }, 300);
+}
 export default function VeterinaryEPrescriptionsList() {
   const [items, setItems]       = useState<any[]>([]);
   const [filtered, setFiltered] = useState<any[]>([]);
@@ -401,6 +560,9 @@ export default function VeterinaryEPrescriptionsList() {
                             <button className="btn btn-sm btn-icon btn-light" title="View" onClick={() => handleOpenView(r)}>
                               <i className="ti ti-eye text-muted" />
                             </button>
+                            <button className="btn btn-sm btn-icon btn-light" title="Print" onClick={() => printPrescription(r)}>
+  <i className="ti ti-printer text-success" />
+</button>
                             <button className="btn btn-sm btn-icon btn-light" title="Edit" onClick={() => handleOpenEdit(r)}>
                               <i className="ti ti-edit text-primary" />
                             </button>
@@ -627,6 +789,11 @@ export default function VeterinaryEPrescriptionsList() {
               {mode === "edit" ? "Update Prescription" : "Save Prescription"}
             </button>
           )}
+          {mode === "view" && selected && (
+  <button type="button" className="btn btn-sm btn-outline-success" onClick={() => printPrescription(selected)}>
+    <i className="ti ti-printer me-1" />Print
+  </button>
+)}
         </div>
       </div>
     </div>

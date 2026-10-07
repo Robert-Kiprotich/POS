@@ -13,7 +13,9 @@ type SaleTypeFilter = "all" | "credit" | "retail" | "wholesale";
 
 const EMPTY = {
   name: "",
+  business_name: "",
   phone: "",
+  alt_phone: "",
   email: "",
   address: "",
   loyalty_points: "0",
@@ -41,7 +43,9 @@ function fmtMoney(value: any) {
 function toForm(c: any) {
   return {
     name: c?.name ?? "",
+    business_name: c?.business_name ?? "",
     phone: c?.phone ?? "",
+    alt_phone: c?.alt_phone ?? "",
     email: c?.email ?? "",
     address: c?.address ?? "",
     loyalty_points: String(c?.loyalty_points ?? 0),
@@ -150,7 +154,9 @@ export default function CustomerFormOffcanvas({
 
     const payload = {
       name: form.name.trim(),
+      business_name: form.business_name.trim(),
       phone: form.phone.trim(),
+      alt_phone: form.alt_phone.trim(),
       email: form.email.trim(),
       address: form.address.trim(),
       loyalty_points: Math.max(0, parseInt(form.loyalty_points, 10) || 0),
@@ -418,7 +424,11 @@ export default function CustomerFormOffcanvas({
                 />
                 {fieldErr("name")}
               </div>
-
+              <div className="mb-3">
+  <label className="form-label fs-13 fw-medium">Business Name <span className="text-muted fw-normal">(optional)</span></label>
+  <input className="form-control" value={form.business_name}
+    onChange={e => setForm({ ...form, business_name: e.target.value })} />
+</div>
               <div className="mb-3">
                 <label className="form-label fs-13 mb-1">Phone</label>
                 <input
@@ -431,7 +441,11 @@ export default function CustomerFormOffcanvas({
                 />
                 {fieldErr("phone")}
               </div>
-
+<div className="mb-3">
+  <label className="form-label fs-13 fw-medium">Alternative Phone <span className="text-muted fw-normal">(optional)</span></label>
+  <input className="form-control" value={form.alt_phone}
+    onChange={e => setForm({ ...form, alt_phone: e.target.value })} />
+</div>
               <div className="mb-3">
                 <label className="form-label fs-13 mb-1">Email</label>
                 <input

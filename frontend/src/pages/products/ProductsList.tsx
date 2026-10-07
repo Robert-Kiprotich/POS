@@ -5,6 +5,7 @@ import API from "../../services/api";
 import { all_routes } from "../../routes/all_routes";
 import { showSuccess, showError, showWarning, showConfirm } from "../../components/alerts/Alerts";
 import { useAutoRefresh } from "../../hooks/useAutoRefresh";
+import { useBranchAccess } from "../../hooks/useBranchAccess";
 
 const route = all_routes;
 
@@ -141,6 +142,7 @@ export default function ProductsList() {
   const [error, setError]                     = useState("");
     const [branchPrices, setBranchPrices] = useState<any[]>([]);
   const [loadingBP, setLoadingBP]       = useState(false);
+    const { isHO, userBranchId, loading: loadingAccess } = useBranchAccess();
 
   const [form, setForm] = useState<ProductForm>({
     name: "",
@@ -206,7 +208,14 @@ const load = useCallback(async (silent = false) => {
       await fetchCategories();
       const res = await API.get("products/");
       const raw: any[] = res.data?.results || res.data?.data || (Array.isArray(res.data) ? res.data : []);
-      setProducts(raw.map(normalizeProduct));
+            let rows = raw.map(normalizeProduct);
+      if (!isHO && userBranchId) {
+        const bs = await API.get("branch-stocks/", { params: { branch: userBranchId, page_size: 5000 } });
+        const bsRows: any[] = bs.data?.results || (Array.isArray(bs.data) ? bs.data : []);
+        const qty = new Map<number, number>(bsRows.map(r => [r.product, r.stock_quantity]));
+        rows = rows.map(p => ({ ...p, total_stock: qty.get(p.id) ?? 0 }));
+      }
+      setProducts(rows);
     } catch (err: any) {
       if (err.response?.status === 401) {
         console.error("Unauthorized - Please log in");
@@ -217,9 +226,9 @@ const load = useCallback(async (silent = false) => {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [fetchCategories]);
+  }, [fetchCategories,isHO, userBranchId]);
 
-  useEffect(() => { load(); }, [load]);
+    useEffect(() => { if (!loadingAccess) load(); }, [load, loadingAccess]);
 
   useAutoRefresh(() => load(true), 30000);
 

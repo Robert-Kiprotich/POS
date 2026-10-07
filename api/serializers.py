@@ -137,14 +137,20 @@ class CustomerSaleSerializer(serializers.ModelSerializer):
 
 
 class CustomerSerializer(serializers.ModelSerializer):
-    sales = CustomerSaleSerializer(
-        many=True,
-        read_only=True
-    )
+    sales = serializers.SerializerMethodField()
+
     class Meta:
         model = Customer
-        fields = ["id", "name", "phone", "email", "address", "loyalty_points", "created_at","sales"]
+        fields = ["id", "name", "business_name", "phone", "alt_phone", "email", "address",
+                  "loyalty_points", "created_at", "sales"]
 
+    def get_sales(self, obj):
+        from .branch_scope import scope_by_branch
+        qs = obj.sales.all()
+        request = self.context.get("request")
+        if request:
+            qs = scope_by_branch(qs, request, "branch_id")
+        return CustomerSaleSerializer(qs, many=True).data
 
 class PaymentSerializer(serializers.ModelSerializer):
     method_display = serializers.CharField(source="get_method_display", read_only=True)
@@ -172,8 +178,7 @@ class SaleReceiptSerializer(serializers.ModelSerializer):
         return obj.customer.name if obj.customer else "Walk-in Customer"
 
     def get_sale_type(self, obj):
-        first_payment = obj.payments.first()  # adjust related_name if yours differs
-        return first_payment.sale_type if first_payment else ""
+        return obj.sale_type
     def get_receipt_text(self, obj):
         lines = [
             f"Receipt: {obj.order_number}",
@@ -363,6 +368,9 @@ class StockMovementSerializer(serializers.ModelSerializer):
     branch_name = serializers.CharField(source="branch.name", read_only=True, default=None)
     destination_branch_name = serializers.CharField(source="destination_branch.name", read_only=True, default=None)
     created_by_name = serializers.SerializerMethodField()
+    fee_branch_name = serializers.CharField(source="fee_branch.name", read_only=True, default=None)
+    total_fee = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+
 
     class Meta:
         model = StockMovement
@@ -370,9 +378,11 @@ class StockMovementSerializer(serializers.ModelSerializer):
             "id", "product", "product_name", "branch", "branch_name",
             "destination_branch", "destination_branch_name",
             "movement_type", "quantity_change", "note",
+            "note",
+            "movement_fee", "total_fee", "fee_branch", "fee_branch_name",
             "created_by", "created_by_name", "created_at",
         ]
-        read_only_fields = ["created_at", "created_by"]
+        read_only_fields = ["created_at", "created_by", "movement_fee", "fee_branch", "total_fee"]
 
     def get_created_by_name(self, obj):
         u = obj.created_by
@@ -413,10 +423,11 @@ class RoleSerializer(serializers.ModelSerializer):
 
 class UserBasicSerializer(serializers.ModelSerializer):
     role = RoleSerializer(many=False, read_only=True)
+    branch_name = serializers.CharField(source="branch.name", read_only=True, default=None)
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'firstname', 'lastname', 'email', 'phone', 'role', 'date_joined', 'is_active', 'is_admin']
+        fields = ['id', 'username', 'firstname', 'lastname', 'email', 'phone', 'role', 'date_joined', 'is_active', 'is_admin',"branch", "branch_name",]
 
 
 class VeterinaryEPrescriptionSerializer(serializers.ModelSerializer):
@@ -513,6 +524,8 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
     # --- Explicit date fields so "" from the frontend is coerced safely ---
     issue_date = serializers.DateField(required=True)
     due_date = serializers.DateField(required=False, allow_null=True)
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True, default=None)
+    payment_status = serializers.CharField(read_only=True)
 
     class Meta:
         model = SalesInvoice
@@ -549,6 +562,9 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
             # Context (read-only, from the sale)
             "branch_name",
             "customer_name",
+            "supplier", 
+            "supplier_name", 
+            "payment_status",
             # Timestamps
             "created_at",
             "updated_at",
@@ -561,11 +577,12 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        extra_kwargs = {"sale": {"required": False, "allow_null": True}}
+        extra_kwargs = {"sale": {"required": False, "allow_null": True},
+                        "supplier": {"required": False, "allow_null": True}}
 
     def to_internal_value(self, data):
         mutable = data.copy() if hasattr(data, "copy") else dict(data)
-        for key in ("due_date", "issue_date"):
+        for key in ("due_date", "issue_date","supplier"):
             if mutable.get(key) == "":
                 mutable[key] = None
         return super().to_internal_value(mutable)
@@ -672,15 +689,14 @@ class EmployeeSerializer(serializers.ModelSerializer):
     def to_internal_value(self, data):
         mutable = data.copy() if hasattr(data, "copy") else dict(data)
         for key in ("date_of_birth", "hire_date", "end_date"):
-            if mutable.get(key) == "":
+            if key in mutable and mutable.get(key) == "":
                 mutable[key] = None
         for key in ("manager", "branch", "role", "user"):
-            if mutable.get(key) in ("", None):
+            if key in mutable and mutable.get(key) in ("", None):
                 mutable[key] = None
-        if mutable.get("basic_salary") == "":
+        if "basic_salary" in mutable and mutable.get("basic_salary") == "":
             mutable["basic_salary"] = None
         return super().to_internal_value(mutable)
-
     def validate_hire_date(self, value):
         if value is None:
             raise serializers.ValidationError("Hire date is required.")
@@ -994,9 +1010,255 @@ class ChequeDepositSerializer(serializers.ModelSerializer):
         return attrs
 
 
-# =============================================================================
-# 3) views.py  (append)
-# =============================================================================
+class SupplierSerializer(serializers.ModelSerializer):
+    payment_terms_display = serializers.CharField(source="get_payment_terms_display", read_only=True)
+    total_billed = serializers.SerializerMethodField()
+    total_paid = serializers.SerializerMethodField()
+    balance = serializers.SerializerMethodField()
+    payment_status = serializers.SerializerMethodField()
 
+    class Meta:
+        model = Supplier
+        fields = [
+            "id", "name", "contact_person", "phone", "alt_phone", "email", "address",
+            "kra_pin", "bank_name", "bank_account", "payment_terms", "payment_terms_display",
+            "notes","total_billed", "total_paid", "balance", "payment_status", "is_active", "created_at", "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at"]
+
+    def _money(self, obj):
+        if hasattr(obj, "total_billed"):          # annotated by the viewset
+            return float(obj.total_billed), float(obj.total_paid)
+        billed = obj.purchase_invoices.exclude(status="cancelled").filter(invoice_type="purchase") \
+            .aggregate(t=Sum("total_amount"))["t"] or 0
+        paid = obj.business_payments.filter(status="paid").aggregate(t=Sum("amount"))["t"] or 0
+        return float(billed), float(paid)
+
+    def get_total_billed(self, obj):
+        return self._money(obj)[0]
+
+    def get_total_paid(self, obj):
+        return self._money(obj)[1]
+
+    def get_balance(self, obj):
+        billed, paid = self._money(obj)
+        return round(billed - paid, 2)
+
+    def get_payment_status(self, obj):
+        billed, paid = self._money(obj)
+        if paid <= 0:
+            return "not_paid" if billed > 0 else None
+        return "paid" if paid >= billed else "partial"
+    def validate_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Supplier name is required.")
+        qs = Supplier.objects.filter(name__iexact=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("A supplier with this name already exists.")
+        return value
+
+    def validate_kra_pin(self, value):
+        return value.strip().upper()
+
+class PettyCashExpenseSerializer(serializers.ModelSerializer):
+    cashier_name = serializers.SerializerMethodField()
+    branch_name = serializers.CharField(source="branch.name", read_only=True, default="")
+    reviewed_by_name = serializers.SerializerMethodField()
+    category_display = serializers.CharField(source="get_category_display", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+
+    class Meta:
+        model = PettyCashExpense
+        fields = [
+            "id", "branch", "branch_name", "cashier", "cashier_name",
+            "category", "category_display", "description", "amount", "expense_date",
+            "receipt_number", "receipt_image",
+            "status", "status_display", "reviewed_by", "reviewed_by_name", "reviewed_at", "review_note",
+            "created_at", "updated_at",
+        ]
+        # The cashier is always the logged-in user; status only changes via approve/reject.
+        read_only_fields = ["cashier", "status", "reviewed_by", "reviewed_at", "review_note",
+                            "created_at", "updated_at"]
+
+    @staticmethod
+    def _name(u):
+        if not u:
+            return ""
+        return f"{u.firstname} {u.lastname}".strip() or u.username
+
+    def get_cashier_name(self, obj):
+        return self._name(obj.cashier) or "—"
+
+    def get_reviewed_by_name(self, obj):
+        return self._name(obj.reviewed_by)
+
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Amount must be greater than zero.")
+        return value
+
+    def validate_expense_date(self, value):
+        if value > timezone.localdate():
+            raise serializers.ValidationError("Expense date cannot be in the future.")
+        return value
+
+    def validate_description(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Describe what the money was spent on.")
+        return value
+
+class BusinessPaymentSerializer(serializers.ModelSerializer):
+    category_display = serializers.CharField(source="get_category_display", read_only=True)
+    method_display = serializers.CharField(source="get_method_display", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True, default=None)
+    branch_name = serializers.CharField(source="branch.name", read_only=True, default=None)
+    purchase_invoice_number = serializers.CharField(source="purchase_invoice.invoice_number", read_only=True, default=None)
+    invoice_balance = serializers.DecimalField(source="purchase_invoice.balance_due", max_digits=12,
+                                               decimal_places=2, read_only=True, default=None)
+    invoice_payment_status = serializers.CharField(source="purchase_invoice.payment_status", read_only=True, default=None)
+    created_by_name = serializers.SerializerMethodField()
+    attachment_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BusinessPayment
+        fields = [
+            "id", "category", "category_display", "supplier", "supplier_name", "payee",
+            "branch", "branch_name", "description", "amount", "payment_date", "period",
+            "method", "method_display", "reference", "invoice_number",
+            "attachment", "attachment_url",
+            "status", "status_display", "cancel_reason","invoice_balance", "invoice_payment_status","purchase_invoice", "purchase_invoice_number",
+            "created_by", "created_by_name", "created_at", "updated_at",
+        ]
+        read_only_fields = ["status", "cancel_reason", "created_by", "created_at", "updated_at"]
+        extra_kwargs = {
+            "attachment": {"write_only": True, "required": False},
+            "supplier": {"required": False, "allow_null": True},
+            "branch": {"required": False, "allow_null": True},
+            "period": {"required": False, "allow_null": True},
+        }
+
+    def get_created_by_name(self, obj):
+        u = obj.created_by
+        if not u:
+            return "—"
+        return f"{u.firstname} {u.lastname}".strip() or u.username
+
+    def get_attachment_url(self, obj):
+        if not obj.attachment:
+            return None
+        request = self.context.get("request")
+        return request.build_absolute_uri(obj.attachment.url) if request else obj.attachment.url
+
+    def to_internal_value(self, data):
+        mutable = data.copy() if hasattr(data, "copy") else dict(data)
+        for key in ("supplier", "branch", "period"):
+            if mutable.get(key) == "":
+                mutable[key] = None
+        # A blank or non-file attachment means "no file", not an error
+        att = mutable.get("attachment")
+        if att in ("", None) or isinstance(att, (str, dict)):
+            mutable.pop("attachment", None)
+        return super().to_internal_value(mutable)
+
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Amount must be greater than zero.")
+        return value
+
+    def validate_payment_date(self, value):
+        if value > timezone.localdate():
+            raise serializers.ValidationError("Payment date cannot be in the future.")
+        return value
+
+    def validate_period(self, value):
+        return value.replace(day=1) if value else value
+
+    def validate(self, attrs):
+        inst = self.instance
+        if inst and inst.status == BusinessPayment.Status.CANCELLED:
+            raise serializers.ValidationError("A cancelled payment can't be edited.")
+
+        def pick(name):
+            return attrs[name] if name in attrs else getattr(inst, name, None)
+
+        C = BusinessPayment.Category
+        category, supplier = pick("category"), pick("supplier")
+        payee, invoice, amount = (pick("payee") or "").strip(), pick("purchase_invoice"), pick("amount")
+
+        if category not in (C.SUPPLIER, C.INVOICE):
+            attrs["supplier"] = None
+            attrs["purchase_invoice"] = None
+            if not payee:
+                raise serializers.ValidationError({"payee": "Enter who was paid."})
+            return attrs
+
+        if invoice:
+            if invoice.invoice_type != SalesInvoice.InvoiceType.PURCHASE or not invoice.supplier_id:
+                raise serializers.ValidationError({"purchase_invoice": "Choose a supplier bill."})
+            if invoice.status == SalesInvoice.Status.CANCELLED:
+                raise serializers.ValidationError({"purchase_invoice": "This bill is cancelled."})
+            attrs["supplier"] = supplier = invoice.supplier
+            others = invoice.payments_made.filter(status="paid")
+            if inst:
+                others = others.exclude(pk=inst.pk)
+            already = others.aggregate(t=Sum("amount"))["t"] or Decimal("0.00")
+            remaining = invoice.total_amount - already
+            if amount is not None and amount > remaining:
+                raise serializers.ValidationError(
+                    {"amount": f"This bill only has {remaining} left to pay."})
+
+        if category == C.SUPPLIER and not supplier:
+            raise serializers.ValidationError({"supplier": "Select the supplier you are paying."})
+        if category == C.INVOICE and not supplier and not payee:
+            raise serializers.ValidationError({"payee": "Select a supplier or enter who was paid."})
+        return attrs
+
+class StoreStockSerializer(serializers.ModelSerializer):
+    product_detail = ProductMiniSerializer(source="product", read_only=True)
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    item_number = serializers.CharField(source="product.item_number", read_only=True)
+    category_name = serializers.CharField(source="product.category.name", read_only=True, default=None)
+    is_low_stock = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = StoreStock
+        fields = [
+            "id", "product", "product_detail", "product_name", "item_number", "category_name",
+            "quantity", "reorder_level", "is_low_stock", "updated_at",
+        ]
+        # Quantity only changes through receive / move_to_head_office, never by direct edit.
+        read_only_fields = ["quantity", "updated_at"]
+
+    def validate_reorder_level(self, value):
+        if value < 0:
+            raise serializers.ValidationError("Reorder level cannot be negative.")
+        return value
+
+
+class StoreMovementSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    item_number = serializers.CharField(source="product.item_number", read_only=True)
+    movement_type_display = serializers.CharField(source="get_movement_type_display", read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StoreMovement
+        fields = [
+            "id", "product", "product_name", "item_number",
+            "movement_type", "movement_type_display", "quantity_change", "balance_after",
+            "note", "created_by", "created_by_name", "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_created_by_name(self, obj):
+        u = obj.created_by
+        if not u:
+            return "System"
+        return f"{u.firstname} {u.lastname}".strip() or u.username
 
 

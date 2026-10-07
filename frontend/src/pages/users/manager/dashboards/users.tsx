@@ -18,6 +18,7 @@ const COLUMNS = [
   { key: "email",       label: "Email" },
   { key: "phone",       label: "Phone" },
   { key: "role",        label: "Role" },
+  { key: "branch_name", label: "Branch" }, 
   { key: "is_active",   label: "Status" },
   { key: "date_joined", label: "Joined" },
 ] as const;
@@ -32,7 +33,8 @@ interface UserForm {
   phone: string;
   address: string;
   password: string;
-  role: string;       // role id as string (kept as "" for none)
+  role: string;  
+  branch: string;      // role id as string (kept as "" for none)
   is_active: boolean;
 }
 
@@ -45,6 +47,7 @@ const emptyForm: UserForm = {
   address: "",
   password: "",
   role: "",
+  branch: "",
   is_active: true,
 };
 
@@ -109,16 +112,17 @@ export default function UsersList() {
   const [form, setForm]         = useState<UserForm>(emptyForm);
   const [saving, setSaving]     = useState(false);
   const [error, setError]       = useState("");
+  const [branches, setBranches] = useState<any[]>([]);
 
-  // --- Load roles once (for filters + form) ---
   const loadRoles = useCallback(async () => {
-    try {
-      const res = await API.get("users/form_data/");
-      setRoles(res.data?.roles || []);
-    } catch (err) {
-      console.error("Failed to load roles:", err);
-    }
-  }, []);
+  try {
+    const res = await API.get("users/form_data/");
+    setRoles(res.data?.roles || []);
+    setBranches(res.data?.branches || []);   // NEW
+  } catch (err) {
+    console.error("Failed to load roles:", err);
+  }
+}, []);
 
   // --- Who am I? Also decides whether the page renders ---
   const loadMe = useCallback(async () => {
@@ -217,6 +221,7 @@ export default function UsersList() {
       address: item.address || "",
       password: "",
       role: item.role?.id ? String(item.role.id) : "",
+      branch: item.branch ? String(item.branch) : "", 
       is_active: item.is_active ?? true,
     });
     setError("");
@@ -257,6 +262,7 @@ export default function UsersList() {
       is_active: form.is_active,
     };
     if (form.role) payload.role = Number(form.role);
+    payload.branch = form.branch ? Number(form.branch) : null;
     if (form.password) payload.password = form.password;
 
     try {
@@ -502,6 +508,7 @@ export default function UsersList() {
                             ? <span className="badge bg-primary-transparent text-primary">{u.role.role_name}</span>
                             : <span className="text-muted">—</span>}
                         </td>
+                        <td>{u.branch_name || <span className="text-muted">—</span>}</td>
                         <td>
                           {u.is_active
                             ? <span className="badge bg-success-transparent text-success">Active</span>
@@ -634,7 +641,19 @@ export default function UsersList() {
                     ))}
                   </select>
                 </Field>
-                <Field className="col-md-6" label="First Name *">
+                <Field className="col-md-6" label="Branch">
+            <select
+              className="form-select fs-13"
+              value={form.branch}
+              onChange={e => setForm({ ...form, branch: e.target.value })}
+            >
+              <option value="">— No branch —</option>
+              {branches.map(b => (
+                <option key={b.id} value={String(b.id)}>{b.name}</option>
+              ))}
+            </select>
+          </Field>
+                          <Field className="col-md-6" label="First Name *">
                   <input
                     type="text"
                     className="form-control fs-13"
@@ -763,22 +782,26 @@ function UserView({ item, fmtDate }: { item: any; fmtDate: (s?: string) => strin
         <div className="col-6"><ViewRow label="USERNAME" value={item.username} /></div>
         <div className="col-6">
           <ViewRow
-            label="ROLE"
-            value={item.role?.role_name
-              ? <span className="badge bg-primary-transparent text-primary">{item.role.role_name}</span>
-              : ""}
-          />
-        </div>
-        <div className="col-6"><ViewRow label="FIRST NAME" value={item.firstname} /></div>
-        <div className="col-6"><ViewRow label="LAST NAME" value={item.lastname} /></div>
-        <div className="col-6">
-          <ViewRow
             label="STATUS"
             value={item.is_active
               ? <span className="badge bg-success-transparent text-success">Active</span>
               : <span className="badge bg-secondary-transparent text-secondary">Inactive</span>}
           />
         </div>
+
+        <div className="col-6"><ViewRow label="FIRST NAME" value={item.firstname} /></div>
+        <div className="col-6"><ViewRow label="LAST NAME" value={item.lastname} /></div>
+
+        <div className="col-6">
+          <ViewRow
+            label="ROLE"
+            value={item.role?.role_name
+              ? <span className="badge bg-primary-transparent text-primary">{item.role.role_name}</span>
+              : ""}
+          />
+        </div>
+        <div className="col-6"><ViewRow label="BRANCH" value={item.branch_name} /></div>
+
         <div className="col-6">
           <ViewRow
             label="ADMIN"
