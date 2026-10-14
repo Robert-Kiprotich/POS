@@ -633,7 +633,7 @@ await showSuccess(
           {/* ── Top bar: title, Billing To, Receipts ─────────────────── */}
           <div className="card shadow-none border mb-2 flex-shrink-0">
             <div className="card-body py-2 px-3 d-flex align-items-center justify-content-between gap-3 flex-wrap">
-              <h4 className="fw-semibold mb-0">New Sale</h4>
+              <h4 className="fw-semibold mb-0">New POS Sale</h4>
 
               <div className="position-relative flex-grow-1" style={{ maxWidth: 380 }}>
                 <div className="d-flex align-items-center gap-2">
@@ -756,15 +756,15 @@ await showSuccess(
                             onClick={() => { addItem(p); setProductSearch(""); setShowProductDropdown(false); }}
                           >
                             <div className="flex-grow-1">
-                              <div className="fw-medium">{p.name}</div>
+                             
                               <div className="fw-medium">
   {p.name}
   {p.pack_size && <span className="text-muted fw-normal"> · {p.pack_size}</span>}
 </div>
-<div className="text-muted fs-11">
+<div className="text-muted fs-11"><strong>
   {p.manufacturer && <>{p.manufacturer} · </>}
-  {p.item_number} · Stock: {stockFor(p.id)} · {money(priceFor(p))} ({saleType})
-</div>
+ {p.item_number} · Stock: {stockFor(p.id)} · {money(priceFor(p))} ({saleType})
+</strong> </div>
                             </div>
                             <input
                               type="number" min={1} className="form-control form-control-sm"

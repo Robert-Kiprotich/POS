@@ -25,17 +25,17 @@ export const SidebarData = [
       {
         key: "admin_dashboard", label: "Dashboard", link: route.adminDashboard, submenu: false, showSubRoute: false,
         icon: "layout-dashboard", base: "admin-dashboard", materialicons: "start", dot: false,
-        roles: [ADMIN, MANAGER], submenuItems: [],
+        roles: [ADMIN], submenuItems: [],
       },
       {
         key: "pos", label: "POS", link: route.pos, submenu: false, showSubRoute: false,
         icon: "shopping-cart", base: "calls", materialicons: "start", dot: false,
-        roles: [ADMIN, MANAGER, CLERK, CASHIER], submenuItems: [],
+        roles: [ADMIN, CLERK, CASHIER], submenuItems: [],
       },
       {
         key: "cashier_records", label: "Cashier Records", link: route.cashier, submenu: false, showSubRoute: false,
         icon: "report-money", base: "calls", materialicons: "start", dot: false,
-        roles: [ADMIN, MANAGER, CLERK, CASHIER], submenuItems: [],
+        roles: [ADMIN, CLERK, CASHIER], submenuItems: [],
       },
       {
         key: "products", label: "Products", link: route.products, submenu: false, showSubRoute: false,
@@ -68,12 +68,12 @@ export const SidebarData = [
         roles: [ADMIN, MANAGER, CLERK], submenuItems: [
 
            {
-            key: "suppliers", label: "Suppliers", link: route.suppliers, submenu: false, showSubRoute: false,
+            key: "", label: "Suppliers", link: route.suppliers, submenu: false, showSubRoute: false,
             icon: "building-store", base: "users", materialicons: "start", dot: false,
             roles: [ADMIN], submenuItems: [],
           },
           {
-            key: "supplies", label: "Supplies", link: route.supplies, submenu: false, showSubRoute: false,
+            key: "", label: "Supplies", link: route.supplies, submenu: false, showSubRoute: false,
             icon: "package", base: "sources", materialicons: "start", dot: false,
             roles: [ADMIN], submenuItems: [],
           },

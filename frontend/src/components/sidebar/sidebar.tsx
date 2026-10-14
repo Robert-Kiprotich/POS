@@ -10,6 +10,7 @@ import React from "react";
 import { all_routes } from "../../routes/all_routes";
 import posLogo from "../../../Logo.jpeg";
 import API from "../../services/api";
+import { useMenuAccess } from "../../pages/acess/menuAccessHelpers";
 
 // Frontend action mapping directly to your DRF viewset custom action
 export const getAuthenticatedUser = async () => {
@@ -30,6 +31,7 @@ const Sidebar = () => {
   // =========================================================================
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loadingUser, setLoadingUser] = useState(true);
+  const { access, loading: loadingAccess } = useMenuAccess();
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -64,20 +66,29 @@ const Sidebar = () => {
   const isSalesClerk = userRole === ROLES.SALES_CLERK;
   const isStoreKeeper = userRole === ROLES.STORE_KEEPER;
 
- const isSuperuser = !!currentUser?.is_superuser;
-// Filter the whole menu tree (sections, items, sub-items) by role.
-// - no `roles` on an item  -> everyone sees it
-// - `roles: [...]`         -> only those roles (superusers see everything)
-// - a parent whose children are all hidden is hidden too
+const isAdminUser = userRole === ROLES.ADMINISTRATOR || !!access?.is_admin;
+
 const visibleMenu = useMemo(() => {
- const canSee = (item: any) => {
-  if (isSuperuser) {
-    // superusers see everything except the non-admin dashboards
-    return !(item.label === "Dashboard" && item.link !== route.adminDashboard);
-  }
-  if (!item?.roles || item.roles.length === 0) return true;
-  return item.roles.some((r: string) => r.trim().toLowerCase() === userRole);
-};
+  const canSee = (item: any) => {
+    // Parents (Supply, Stock, Management) have no permission of their own:
+    // they show only if at least one child survives the filter below.
+    if (item.submenuItems && item.submenuItems.length > 0) return true;
+
+    // Admins see everything except the non-admin dashboard
+    if (isAdminUser) {
+      return !(item.key === "dashboard");
+    }
+
+    // Role has been customised on the Access Control page -> use the saved keys
+    if (access?.configured) {
+      return !!item.key && access.keys.includes(item.key);
+    }
+
+    // Otherwise fall back to the built-in roles in SidebarData
+    if (!item?.roles || item.roles.length === 0) return true;
+    return item.roles.some((r: string) => r.trim().toLowerCase() === userRole);
+  };
+
   const filterItems = (items: any[]): any[] =>
     (items || [])
       .filter(canSee)
@@ -91,15 +102,14 @@ const visibleMenu = useMemo(() => {
   return (SidebarData as any[])
     .map((section) => ({ ...section, submenuItems: filterItems(section.submenuItems) }))
     .filter((section) => section.submenuItems.length > 0);
-}, [userRole, isSuperuser]);
-
+}, [userRole, isAdminUser, access]);
   // Route the logo to the dashboard matching the logged-in user's role.
   const roleDashboardRoute = (() => {
     if (currentUser?.is_superuser || userRole === ROLES.ADMINISTRATOR) {
       return route.adminDashboard;
     }
     if (userRole === ROLES.BRANCH_MANAGER) {
-      return route.supervisorDashboard;
+      return route.adminDashboard;
     }
     return route.dashboard;
   })();
@@ -258,7 +268,7 @@ const visibleMenu = useMemo(() => {
   }, [themeSettings]);
 
   // Prevent UI frame popping/collapsing during layout authorization lookup
-  if (loadingUser) {
+   if (loadingUser || loadingAccess) {          // <- changed line
     return <div className="sidebar" id="sidebar" style={{ width: "260px" }} />;
   }
 
