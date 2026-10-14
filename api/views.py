@@ -48,8 +48,9 @@ class ProductViewSet(viewsets.ModelViewSet):
     )
     serializer_class = ProductSerializer
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["name", "item_number", "description"]
+    search_fields = ["name", "item_number", "description","manufacturer"]
     ordering_fields = ["name", "retail_price", "wholesale_price", "total_stock", "expiry_date", "created_at"]
+    ordering = ["-created_at", "-id"]
     def get_queryset(self):
         qs = super().get_queryset()
         category_id = self.request.query_params.get("category")
@@ -245,14 +246,31 @@ class SaleViewSet(viewsets.ModelViewSet):
         if sale.status != Sale.Status.CANCELLED:
             # Any payment recorded at the till = completed sale.
             # The unpaid remainder is tracked as the balance (total - paid).
-            sale.status = Sale.Status.COMPLETED if paid > 0 else Sale.Status.PENDING
+            fully_paid = paid > 0 and paid >= sale.total_amount
+            sale.status = Sale.Status.COMPLETED if fully_paid else Sale.Status.PENDING 
         sale.save(update_fields=["amount_paid", "status", "updated_at"])
         return sale
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
         check_branch_access(request.user, serializer.validated_data["branch"].pk)
+        if serializer.validated_data.get("sale_type", "Retail") == "Retail":
+            from django.db.models import Sum  # already imported at top; remove if duplicate
+            paid_in = sum(
+                (Decimal(str(p.get("amount") or 0)) for p in request.data.get("payments", [])),
+                Decimal("0.00"),
+            )
+            items_total = Decimal("0.00")
+            for it in serializer.validated_data["items"]:
+                items_total += (it.get("unit_price") or it["product"].retail_price) * it["quantity"] * (
+                    1 + it["product"].tax_rate / 100) - (it.get("discount_amount") or 0)
+            items_total -= serializer.validated_data.get("discount_amount") or Decimal("0.00")
+            if paid_in < items_total:
+                raise DRFValidationError(
+                    {"payments": "Retail sales must be paid in full. Use Wholesale or Credit for part payment."}
+                )
         with transaction.atomic():
             sale = serializer.save()
             sale_type = request.data.get("sale_type")
@@ -306,7 +324,7 @@ class SaleViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             serializer.save(received_by=request.user if request.user.is_authenticated else None)
             sale = self._sync_payment_status(sale)
-        return Response(SaleSerializer(sale).data)
+        return Response(SaleSerializer(sale, context=self.get_serializer_context()).data)
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
         """POST /api/pos/sales/{id}/cancel/ — cancels a sale and restocks its items at the sale's branch."""
@@ -359,6 +377,30 @@ class SaleViewSet(viewsets.ModelViewSet):
             "total_tax": summary["total_tax"] or 0,
             "total_discount": summary["total_discount"] or 0,
         })
+
+    @action(detail=False, methods=["get"])
+    def by_branch(self, request):
+        """GET /api/pos/sales/by_branch/?date_from=&date_to= (Head Office only)"""
+        if not sees_all_branches(request.user):
+            raise PermissionDenied("Only Head Office can compare branches.")
+        qs = Sale.objects.exclude(status=Sale.Status.CANCELLED)
+        if request.query_params.get("date_from"):
+            qs = qs.filter(created_at__date__gte=request.query_params["date_from"])
+        if request.query_params.get("date_to"):
+            qs = qs.filter(created_at__date__lte=request.query_params["date_to"])
+        zero = Decimal("0.00")
+        rows = (qs.exclude(branch__isnull=True).values("branch")
+                .annotate(
+                    total_revenue=Coalesce(Sum("total_amount", filter=Q(status=Sale.Status.COMPLETED)), zero),
+                    sales_count=Count("id", filter=Q(status=Sale.Status.COMPLETED)),
+                    outstanding=Coalesce(Sum(F("total_amount") - F("amount_paid"),
+                                             filter=Q(total_amount__gt=F("amount_paid"))), zero),
+                ).order_by("-total_revenue"))
+        return Response({"branches": [
+            {"branch": r["branch"], "total_revenue": float(r["total_revenue"]),
+             "sales_count": r["sales_count"], "outstanding": float(r["outstanding"])}
+            for r in rows
+        ]})
     @action(detail=False, methods=["get"])
     def receipts(self, request):
         """
@@ -783,8 +825,8 @@ class VeterinaryEPrescriptionViewSet(viewsets.ModelViewSet):
 
 class SalesInvoiceViewSet(viewsets.ModelViewSet):
     queryset = SalesInvoice.objects.select_related(
-        "sale", "sale__branch", "sale__customer","supplier",
-    ).all()
+        "sale", "sale__branch", "sale__customer", "supplier",
+    ).prefetch_related("line_items", "sale__items__product__category").all()
     serializer_class = SalesInvoiceSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -1158,6 +1200,38 @@ def _dashboard_view(user):
 SALES_KEYS = ["sales", "orders", "profit", "items_sold", "customers",
               "outstanding_payments", "cash_in_till", "sales_trend",
               "payment_breakdown", "top_products"]
+
+PROFIT_EXCLUDED_CATEGORIES = {"supplier", "invoice"}
+
+
+def _period_expenses(start, end, branch_id=None):
+    """(petty_cash, business_expenses, salaries) for the period. Rejected/cancelled ones don't count."""
+    petty = PettyCashExpense.objects.filter(
+        expense_date__gte=start, expense_date__lte=end,
+    ).exclude(status=PettyCashExpense.Status.REJECTED)
+
+    biz = BusinessPayment.objects.filter(
+        payment_date__gte=start, payment_date__lte=end,
+        status=BusinessPayment.Status.PAID,
+    ).exclude(category__in=PROFIT_EXCLUDED_CATEGORIES)
+
+    # Salaries are recorded by payment date; scope via the employee's branch.
+    sal = SalaryPayment.objects.filter(
+        status=SalaryPayment.Status.PAID,
+        paid_on__gte=start, paid_on__lte=end,
+    )
+
+    if branch_id:
+        petty = petty.filter(branch_id=branch_id)
+        biz = biz.filter(branch_id=branch_id)
+        sal = sal.filter(employee__branch_id=branch_id)
+
+    zero = Decimal("0.00")
+    return (
+        petty.aggregate(t=Coalesce(Sum("amount"), zero))["t"],
+        biz.aggregate(t=Coalesce(Sum("amount"), zero))["t"],
+        sal.aggregate(t=Coalesce(Sum("gross_pay"), zero))["t"],
+    )
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def admin_dashboard(request):
@@ -1166,35 +1240,41 @@ def admin_dashboard(request):
     Query params:
       date_from, date_to   → explicit range (used by 'custom' and by client-computed presets)
       range                → informational label: today | week | month | year | custom | all
+      branch               → branch id (Head Office / admins only; everyone else is locked to their own)
     """
     start, end, prev_start, prev_end, label = _parse_range(request)
     bid = visible_branch_id(request)
+
+    # Narrow any queryset to the selected branch. `f` is the lookup path to the branch id.
     _b = lambda qs, f="branch_id": qs.filter(**{f: bid}) if bid else qs
 
     # ---------- Sales ----------
     completed = [Sale.Status.COMPLETED]
-    cur_sales  = _sale_qs(start, end, completed)
-    prev_sales = _sale_qs(prev_start, prev_end, completed)
+    cur_sales  = _b(_sale_qs(start, end, completed))
+    prev_sales = _b(_sale_qs(prev_start, prev_end, completed))
 
-    sales_total  = cur_sales.aggregate(t=Coalesce(Sum("total_amount"), Decimal("0.00")))["t"]
+    sales_total      = cur_sales.aggregate(t=Coalesce(Sum("total_amount"), Decimal("0.00")))["t"]
     prev_sales_total = prev_sales.aggregate(t=Coalesce(Sum("total_amount"), Decimal("0.00")))["t"]
 
     # ---------- Orders ----------
-    orders_total = cur_sales.count()
+    orders_total      = cur_sales.count()
     prev_orders_total = prev_sales.count()
 
-    # ---------- Profit (needs cost_price on sale items; adjust field names if different) ----------
+    # ---------- Profit ----------
     def _profit(qs):
-        # sale_item.line_subtotal - sum(quantity * product.cost_price)
         agg = SaleItem.objects.filter(sale__in=qs).aggregate(
             revenue=Coalesce(Sum(F("quantity") * F("unit_price")), Decimal("0.00")),
             cost=Coalesce(Sum(F("quantity") * F("product__cost_price")), Decimal("0.00")),
         )
         return (agg["revenue"] or Decimal("0.00")) - (agg["cost"] or Decimal("0.00"))
 
-    profit_total      = _profit(cur_sales)
-    prev_profit_total = _profit(prev_sales)
+    gross_profit      = _profit(cur_sales)
+    prev_gross_profit = _profit(prev_sales)
+    petty_cash, biz_expenses, salaries = _period_expenses(start, end, bid)
+    prev_petty, prev_biz, prev_sal     = _period_expenses(prev_start, prev_end, bid)
 
+    profit_total      = gross_profit - petty_cash - biz_expenses - salaries   # net profit
+    prev_profit_total = prev_gross_profit - prev_petty - prev_biz - prev_sal
     # ---------- Items sold ----------
     items_total = SaleItem.objects.filter(sale__in=cur_sales).aggregate(
         t=Coalesce(Sum("quantity"), 0)
@@ -1204,7 +1284,7 @@ def admin_dashboard(request):
     )["t"]
 
     # ---------- Low stock ----------
-    low_stock_qs = (
+    low_stock_qs = _b(
         BranchStock.objects
         .filter(stock_quantity__lte=F("reorder_level"))
         .select_related("product", "branch")
@@ -1221,17 +1301,19 @@ def admin_dashboard(request):
     ]
 
     # ---------- Customers ----------
-    # New customers in range; for 'total', use all-time count. Fall back to all if no created_at on Customer.
-    customers_total = Customer.objects.count()
-    new_customers = Customer.objects.filter(created_at__date__gte=start, created_at__date__lte=end).count()
+    # Customers are not branch-scoped in this view. If Customer has a `branch` FK,
+    # wrap these three querysets in _b(...) as well.
+    customers_total    = Customer.objects.count()
+    new_customers      = Customer.objects.filter(created_at__date__gte=start, created_at__date__lte=end).count()
     prev_new_customers = Customer.objects.filter(
         created_at__date__gte=prev_start, created_at__date__lte=prev_end
     ).count()
 
-    outstanding_qs = (
-    Sale.objects
-    .exclude(status=Sale.Status.CANCELLED)
-    .filter(total_amount__gt=F("amount_paid"))
+    # ---------- Outstanding ----------
+    outstanding_qs = _b(
+        Sale.objects
+        .exclude(status=Sale.Status.CANCELLED)
+        .filter(total_amount__gt=F("amount_paid"))
     )
     outstanding_total = outstanding_qs.aggregate(
         t=Coalesce(Sum(F("total_amount") - F("amount_paid")), Decimal("0.00"))
@@ -1239,10 +1321,9 @@ def admin_dashboard(request):
     outstanding_count = outstanding_qs.count()
 
     # ---------- Cash in till ----------
-    # Cash = payments with method='cash' received today (adjust method value if different).
-    cash_today = Payment.objects.filter(
-        paid_at__date=timezone.localdate(),
-        method="cash",
+    cash_today = _b(
+        Payment.objects.filter(paid_at__date=timezone.localdate(), method="cash"),
+        "sale__branch_id",
     ).aggregate(t=Coalesce(Sum("amount"), Decimal("0.00")))["t"]
 
     # ---------- Sales trend ----------
@@ -1261,7 +1342,7 @@ def admin_dashboard(request):
     # ---------- Payment breakdown ----------
     pay_rows = (
         Payment.objects
-        .filter(sale__in=cur_sales)
+        .filter(sale__in=cur_sales)          # already branch-scoped through cur_sales
         .values("method")
         .annotate(amount=Coalesce(Sum("amount"), Decimal("0.00")))
         .order_by("-amount")
@@ -1278,7 +1359,7 @@ def admin_dashboard(request):
     # ---------- Top products ----------
     top_rows = (
         SaleItem.objects
-        .filter(sale__in=cur_sales)
+        .filter(sale__in=cur_sales)          # already branch-scoped through cur_sales
         .values("product__name")
         .annotate(
             quantity_sold=Coalesce(Sum("quantity"), 0),
@@ -1294,26 +1375,59 @@ def admin_dashboard(request):
         }
         for row in top_rows
     ]
+# ---------- Credit sales (pending vs completed) ----------
+    def _credit_bucket(status):
+        qs = _b(_sale_qs(start, end, [status])).filter(sale_type="Credit")
+        agg = qs.aggregate(
+            total=Coalesce(Sum("total_amount"), Decimal("0.00")),
+            count=Count("id"),
+        )
+        return {"total": float(agg["total"]), "count": agg["count"]}
 
-        # ---------- Stock statistics ----------
+    credit_sales = {
+        "pending": _credit_bucket(Sale.Status.PENDING),
+        "completed": _credit_bucket(Sale.Status.COMPLETED),
+    }
+    def _type_bucket(sale_type):
+        cur = cur_sales.filter(sale_type=sale_type).aggregate(
+            total=Coalesce(Sum("total_amount"), Decimal("0.00")), count=Count("id"))
+        prev = prev_sales.filter(sale_type=sale_type).aggregate(
+            total=Coalesce(Sum("total_amount"), Decimal("0.00")))
+        return {
+            "total": float(cur["total"]),
+            "count": cur["count"],
+            "change_pct": _pct_change(cur["total"], prev["total"]),
+        }
+
+    retail_sales = _type_bucket("Retail")
+    wholesale_sales = _type_bucket("Wholesale")
+    # ---------- Stock statistics ----------
     today = timezone.localdate()
-    stock_qs = BranchStock.objects.filter(product__is_active=True)
+    stock_qs = _b(BranchStock.objects.filter(product__is_active=True))
     stock_value = stock_qs.aggregate(
         t=Coalesce(Sum(ExpressionWrapper(
             F("stock_quantity") * F("product__cost_price"),
             output_field=DecimalField(max_digits=14, decimal_places=2))), Decimal("0.00"))
     )["t"]
+
+    # Products are global; when a branch is selected, count only products stocked there.
     products_qs = Product.objects.filter(is_active=True)
+    if bid:
+       products_qs = products_qs.filter(branch_stocks__branch_id=bid).distinct()
     expiry_qs = products_qs.filter(expiry_date__isnull=False)
-    fee_qs = StockMovement.objects.filter(
+
+    fee_qs = _b(StockMovement.objects.filter(
         movement_type=StockMovement.MovementType.TRANSFER,
         created_at__date__gte=start, created_at__date__lte=end,
-    )
+    ))
     movement_fees = fee_qs.aggregate(
         t=Coalesce(Sum(ExpressionWrapper(
             F("movement_fee") * Abs(F("quantity_change")),
             output_field=DecimalField(max_digits=14, decimal_places=2))), Decimal("0.00"))
     )["t"]
+
+    recent_qs = _b(StockMovement.objects.select_related("product", "branch")).order_by("-created_at")[:8]
+
     stock_block = {
         "total_products": products_qs.count(),
         "units_on_hand": stock_qs.aggregate(t=Coalesce(Sum("stock_quantity"), 0))["t"],
@@ -1331,11 +1445,12 @@ def admin_dashboard(request):
                 "branch": m.branch.name if m.branch else "—",
                 "date": m.created_at.strftime("%d %b %H:%M"),
             }
-            for m in StockMovement.objects.select_related("product", "branch").order_by("-created_at")[:8]
+            for m in recent_qs
         ],
     }
+  
     view = _dashboard_view(request.user)
-    payload ={
+    payload = {
         "status": "success",
         "view": view,
         "stock": stock_block,
@@ -1352,9 +1467,13 @@ def admin_dashboard(request):
             "total": orders_total,
             "change_pct": _pct_change(orders_total, prev_orders_total),
         },
-        "profit": {
-            "total": float(profit_total),
+                "profit": {
+            "total": float(profit_total),            # net profit (what the tile shows)
             "change_pct": _pct_change(profit_total, prev_profit_total),
+            "gross": float(gross_profit),
+            "petty_cash": float(petty_cash),
+            "business_expenses": float(biz_expenses),
+             "salaries": float(salaries),
         },
         "items_sold": {
             "total": items_total,
@@ -1379,8 +1498,12 @@ def admin_dashboard(request):
         "sales_trend": sales_trend,
         "payment_breakdown": payment_breakdown,
         "top_products": top_products,
-        
+        "credit_sales": credit_sales,
+        "credit_sales": credit_sales,
+        "retail_sales": retail_sales,
+        "wholesale_sales": wholesale_sales,
     }
+
     if view == "stock":
         for k in SALES_KEYS:
             payload.pop(k, None)
@@ -1390,8 +1513,6 @@ def admin_dashboard(request):
         payload.pop("low_stock", None)
 
     return Response(payload)
-
-
 class ComplianceRecordViewSet(viewsets.ModelViewSet):
     queryset = ComplianceRecord.objects.select_related("uploaded_by").all()
     serializer_class = ComplianceRecordSerializer
@@ -1460,6 +1581,10 @@ class SalaryPaymentViewSet(viewsets.ModelViewSet):
             qs = qs.filter(employee__branch_id=p["branch"])
         if p.get("year"):
             qs = qs.filter(period__year=p["year"])
+        if p.get("date_from"):
+            qs = qs.filter(paid_on__gte=p["date_from"])
+        if p.get("date_to"):
+            qs = qs.filter(paid_on__lte=p["date_to"])
         month = _parse_period(p.get("period"))   # ?period=2026-09
         if month:
             qs = qs.filter(period=month)
@@ -2229,7 +2354,7 @@ def menu_permissions(request):
     ActivityLog.log("menu_access_updated", user=request.user, entity="Roles", entity_id=role.id,
                     detail=f"Set menu access for role {role.role_name}: {len(keys)} items", request=request)
     return Response({"role": role.id, "configured": True, "menu_keys": keys})
-REPORT_ADMIN_ONLY = {"salaries", "cheques"}   # everything else: admins + branch managers
+REPORT_ADMIN_ONLY = {"salaries", "cheques","profit"}   # everything else: admins + branch managers
 ROW_LIMIT = 5000
 ZERO = Decimal("0.00")
 
@@ -2846,6 +2971,66 @@ def _r_tax(p):
             _col("customer", "Customer"), _col("net", "Sales before tax", "money"),
             _col("tax", "Tax", "money"), _col("gross", "Total with tax", "money")]
     return _result(cols, data, summary, note=note)
+def _gross_profit(start, end, branch_id=None):
+    """(revenue, cost of goods) from completed sales, same basis as the dashboard."""
+    sales = Sale.objects.filter(created_at__date__gte=start, created_at__date__lte=end,
+                                status=Sale.Status.COMPLETED)
+    if branch_id:
+        sales = sales.filter(branch_id=branch_id)
+    agg = SaleItem.objects.filter(sale__in=sales).aggregate(
+        revenue=Coalesce(Sum(ExpressionWrapper(F("quantity") * F("unit_price"), output_field=_dec())), ZERO),
+        cost=Coalesce(Sum(ExpressionWrapper(F("quantity") * F("product__cost_price"), output_field=_dec())), ZERO),
+    )
+    return agg["revenue"], agg["cost"]
+
+
+def _r_profit(p):
+    branch = p.branch
+    revenue, cost = _gross_profit(p.start, p.end, branch)
+    petty, biz, sal = _period_expenses(p.start, p.end, branch)
+    gross = revenue - cost
+    expenses = petty + biz + sal
+    net = gross - expenses
+
+    summary = [
+        _sum("Sales (before tax)", _f(revenue)), _sum("Cost of goods", _f(cost)),
+        _sum("Gross profit", _f(gross)), _sum("Total expenses", _f(expenses)),
+        _sum("Net profit", _f(net)),
+        _sum("Net margin %", round(_f(net) / _f(revenue) * 100, 1) if revenue else 0, "number"),
+    ]
+    note = ("Net profit = sales minus cost of goods, minus petty cash (excluding rejected), business expenses "
+            "and paid salary payslips (gross pay). Supplier and invoice payments are left out because stock cost "
+            "is already in cost of goods. Expenses with no branch only appear when no branch is selected.")
+
+    if p.get("group_by") == "month":
+        data, y, m = [], p.start.year, p.start.month
+        while (y, m) <= (p.end.year, p.end.month):
+            first = date(y, m, 1)
+            last = date(y, m, calendar.monthrange(y, m)[1])
+            s, e = max(first, p.start), min(last, p.end)
+            rev, cst = _gross_profit(s, e, branch)
+            pc, bz, sl = _period_expenses(s, e, branch)
+            g = rev - cst
+            data.append({"grp": first.strftime("%b %Y"), "revenue": _f(rev), "cost": _f(cst), "gross": _f(g),
+                         "petty": _f(pc), "biz": _f(bz), "sal": _f(sl), "net": _f(g - pc - bz - sl)})
+            y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+        cols = [_col("grp", "Month"), _col("revenue", "Sales", "money"), _col("cost", "Cost of goods", "money"),
+                _col("gross", "Gross profit", "money"), _col("petty", "Petty cash", "money"),
+                _col("biz", "Business expenses", "money"), _col("sal", "Salaries", "money"),
+                _col("net", "Net profit", "money")]
+        return _result(cols, data, summary, note=note)
+
+    data = [
+        {"line": "Sales (before tax)", "amount": _f(revenue)},
+        {"line": "Less: cost of goods sold", "amount": -_f(cost)},
+        {"line": "Gross profit", "amount": _f(gross)},
+        {"line": "Less: petty cash expenses", "amount": -_f(petty)},
+        {"line": "Less: business expenses", "amount": -_f(biz)},
+        {"line": "Less: salaries (gross pay)", "amount": -_f(sal)},
+        {"line": "Total expenses", "amount": -_f(expenses)},
+        {"line": "NET PROFIT", "amount": _f(net)},
+    ]
+    return _result([_col("line", "Item"), _col("amount", "Amount", "money")], data, summary, note=note)
 # =====================================================================
 # REGISTRY — one entry per report. `date` is the label of the date filter (None = no date filter).
 # =====================================================================
@@ -2900,6 +3085,9 @@ REPORTS = {
                       "filters": [_sel("drug_category", "Drug category", [("I", "Category I"), ("II", "Category II")]),
                                   _sel("prescription_target", "Prescribed for",
                                        VeterinaryEPrescription.PRESCRIPTION_TARGETS)]},
+
+    "profit": {"label": "Net profit (after expenses & salaries)", "group": "Finance", "date": "Date", "fn": _r_profit,
+               "filters": [BRANCH, _sel("group_by", "Group by", [("month", "Month")])]},
 }
 
 
@@ -2978,7 +3166,7 @@ def _dashboard_view(user):
 
 SALES_KEYS = ["sales", "orders", "profit", "items_sold", "customers",
               "outstanding_payments", "cash_in_till", "sales_trend",
-              "payment_breakdown", "top_products"]
+              "payment_breakdown", "top_products", "credit_sales", "retail_sales", "wholesale_sales"]
 
 class BusinessPaymentViewSet(viewsets.ModelViewSet):
     queryset = BusinessPayment.objects.select_related("supplier", "branch","purchase_invoice", "created_by").all()
@@ -3080,18 +3268,41 @@ class BusinessPaymentViewSet(viewsets.ModelViewSet):
    
     @action(detail=False, methods=["get"])
     def stats(self, request):
-        """GET /api/pos/business-payments/stats/ (all list filters apply; cancelled are excluded)"""
+        """Totals by category. Paid salary payslips (gross pay) are included; cancelled are excluded."""
         qs = self.filter_queryset(self.get_queryset()).exclude(status=BusinessPayment.Status.CANCELLED)
         zero = Decimal("0.00")
         labels = dict(BusinessPayment.Category.choices)
-        rows = qs.values("category").annotate(n=Count("id"), t=Coalesce(Sum("amount"), zero)).order_by("-t")
+        p = request.query_params
+
+        sal = SalaryPayment.objects.filter(status=SalaryPayment.Status.PAID)
+        if p.get("date_from"):
+            sal = sal.filter(paid_on__gte=p["date_from"])
+        if p.get("date_to"):
+            sal = sal.filter(paid_on__lte=p["date_to"])
+        if p.get("branch"):
+            sal = sal.filter(employee__branch_id=p["branch"])
+        if p.get("search"):
+            s = p["search"]
+            sal = sal.filter(Q(employee__first_name__icontains=s) | Q(employee__last_name__icontains=s)
+                             | Q(reference__icontains=s))
+        if (p.get("category") and p["category"] != "salaries") or p.get("status") == "cancelled":
+            sal = sal.none()
+        sal_t = sal.aggregate(n=Count("id"), t=Coalesce(Sum("gross_pay"), zero))
+
+        by = {}
+        for r in qs.values("category").annotate(n=Count("id"), t=Coalesce(Sum("amount"), zero)):
+            by[r["category"]] = {"category": r["category"], "label": labels.get(r["category"], r["category"]),
+                                 "count": r["n"], "total": r["t"]}
+        if sal_t["n"]:
+            cur = by.setdefault("salaries", {"category": "salaries", "label": "Salaries",
+                                             "count": 0, "total": zero})
+            cur["count"] += sal_t["n"]
+            cur["total"] += sal_t["t"]
+
         return Response({
-            "count": qs.count(),
-            "total": qs.aggregate(t=Coalesce(Sum("amount"), zero))["t"],
-            "by_category": [
-                {"category": r["category"], "label": labels.get(r["category"], r["category"]),
-                 "count": r["n"], "total": r["t"]} for r in rows
-            ],
+            "count": qs.count() + sal_t["n"],
+            "total": qs.aggregate(t=Coalesce(Sum("amount"), zero))["t"] + sal_t["t"],
+            "by_category": sorted(by.values(), key=lambda r: r["total"], reverse=True),
         })
 
 class StoreViewSet(viewsets.ModelViewSet):
@@ -3290,3 +3501,256 @@ class StoreMovementViewSet(viewsets.ReadOnlyModelViewSet):
         if p.get("date_to"):
             qs = qs.filter(created_at__date__lte=p["date_to"])
         return qs
+
+
+
+class DepositViewSet(viewsets.ModelViewSet):
+    serializer_class = DepositSerializer
+    permission_classes = [IsAdminUserCustom]
+
+    def _is_admin(self):
+        return IsAdminUserCustom._check_admin(self.request.user)
+
+    def get_queryset(self):
+        qs = Deposit.objects.select_related(
+            "branch",
+            "created_by",
+        )
+
+        params = self.request.query_params
+
+        # Date filters
+        if params.get("date_from"):
+            qs = qs.filter(deposit_date__gte=params["date_from"])
+
+        if params.get("date_to"):
+            qs = qs.filter(deposit_date__lte=params["date_to"])
+
+        # Admin users can see all branches and optionally filter by branch.
+        if self._is_admin():
+            if params.get("branch"):
+                qs = qs.filter(branch_id=params["branch"])
+        # Normal branch users can only see their own branch.
+        else:
+            qs = qs.filter(branch_id=self.request.user.branch_id)
+
+        return qs
+
+    def perform_create(self, serializer):
+        if self._is_admin():
+            branch = serializer.validated_data["branch"]
+        else:
+            branch = self.request.user.branch
+
+        serializer.save(
+            branch=branch,
+            created_by=self.request.user,
+        )
+
+    def update(self, request, *args, **kwargs):
+        if not self._is_admin():
+            raise PermissionDenied("Only an admin can edit deposits.")
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if not self._is_admin():
+            raise PermissionDenied("Only an admin can delete deposits.")
+        return super().destroy(request, *args, **kwargs)
+
+
+class CanManageSupplies(IsAuthenticated):
+    """Only Head Office / admin users. Switch `permission_classes` below to use it."""
+    def has_permission(self, request, view):
+        return super().has_permission(request, view) and sees_all_branches(request.user)
+
+
+def _take_back_stock(supply, user, note):
+    """
+    Remove a supply's quantities from the Store. Checks every line first,
+    so either everything is reversed or nothing is. Raises ValueError if it can't.
+    """
+    items = list(supply.items.select_related("product"))
+    rows = {}
+    for it in items:
+        row = StoreStock.objects.select_for_update().filter(product=it.product).first()
+        have = row.quantity if row else 0
+        if have < it.quantity:
+            raise ValueError(
+                f'Only {have} of "{it.product.name}" left in the store (supply had {it.quantity}). '
+                f"Some may already have been moved to Head Office.")
+        rows[it.pk] = row
+    for it in items:
+        row = rows[it.pk]
+        row.quantity -= it.quantity
+        row.save(update_fields=["quantity", "updated_at"])
+        StoreMovement.objects.create(
+            product=it.product, movement_type=StoreMovement.MovementType.ADJUSTMENT,
+            quantity_change=-it.quantity, balance_after=row.quantity, note=note, created_by=user,
+        )
+
+
+class SupplyViewSet(viewsets.ModelViewSet):
+    """
+    GET    /api/pos/supplies/                        list (?supplier=, ?status=, ?date_from=, ?date_to=, ?search=)
+    GET    /api/pos/supplies/{id}/                   view one supply with all its lines
+    POST   /api/pos/supplies/                        record a delivery (adds stock to the Store)
+    PUT    /api/pos/supplies/{id}/                   edit it (Store stock is adjusted by the difference)
+    DELETE /api/pos/supplies/{id}/                   delete it (stock is taken back out of the Store)
+    POST   /api/pos/supplies/{id}/cancel/            cancel it but keep the record
+    POST   /api/pos/supplies/{id}/generate_invoice/  create (or return) the purchase invoice
+    """
+    queryset = (Supply.objects
+                .select_related("supplier", "received_by", "purchase_invoice")
+                .prefetch_related("items__product", "items__product__category").all())
+    permission_classes = [IsAuthenticated]      # or [CanManageSupplies] to restrict to Head Office
+    http_method_names = ["get", "post", "put", "delete", "head", "options"]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["reference", "supplier_ref", "supplier__name",
+                     "items__product__name", "items__product__item_number"]
+    ordering_fields = ["supply_date", "created_at"]
+    ordering = ["-supply_date", "-id"]
+
+    def get_serializer_class(self):
+        if self.action in ("create", "update"):
+            return SupplyWriteSerializer
+        return SupplySerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        p = self.request.query_params
+        if p.get("supplier"):
+            qs = qs.filter(supplier_id=p["supplier"])
+        if p.get("status"):
+            qs = qs.filter(status=p["status"])
+        if p.get("date_from"):
+            qs = qs.filter(supply_date__gte=p["date_from"])
+        if p.get("date_to"):
+            qs = qs.filter(supply_date__lte=p["date_to"])
+        return qs.distinct()
+
+    @staticmethod
+    def _log(request, action_name, supply, detail):
+        from users.models import ActivityLog
+        ActivityLog.log(action_name, user=request.user, entity="Supply",
+                        entity_id=supply.id, detail=detail, request=request)
+
+    # ---------- create ----------
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        supply = serializer.save()
+        self._log(request, "supply_received", supply,
+                  f"Received supply {supply.reference} from {supply.supplier.name} "
+                  f"({supply.items.count()} products)")
+        supply = self.get_queryset().get(pk=supply.pk)
+        return Response(SupplySerializer(supply, context=self.get_serializer_context()).data,
+                        status=status.HTTP_201_CREATED)
+
+    # ---------- edit ----------
+    def update(self, request, *args, **kwargs):
+        supply = self.get_object()
+        serializer = self.get_serializer(supply, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        supply = serializer.save()
+        self._log(request, "supply_updated", supply, f"Edited supply {supply.reference}")
+        supply = self.get_queryset().get(pk=supply.pk)
+        return Response(SupplySerializer(supply, context=self.get_serializer_context()).data)
+
+    # ---------- delete ----------
+    def destroy(self, request, *args, **kwargs):
+        user = request.user if request.user.is_authenticated else None
+        try:
+            with transaction.atomic():
+                supply = Supply.objects.select_for_update().get(pk=self.get_object().pk)
+                bill = supply.purchase_invoice
+                if bill and bill.payments_made.filter(status="paid").exists():
+                    raise ValueError("The invoice for this supply has payments. Cancel those payments first.")
+
+                if supply.status == Supply.Status.RECEIVED:
+                    _take_back_stock(supply, user, f"Deleted supply {supply.reference}")
+
+                ref, name, sid = supply.reference, supply.supplier.name, supply.id
+                supply.delete()          # removes its lines too
+                if bill:
+                    bill.delete()        # removes the invoice and its lines
+        except ValueError as e:
+            return Response({"error": f"Can't delete: {e}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        from users.models import ActivityLog
+        ActivityLog.log("supply_deleted", user=request.user, entity="Supply", entity_id=sid,
+                        detail=f"Deleted supply {ref} from {name}", request=request)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    # ---------- cancel (keeps the record) ----------
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        reason = (request.data.get("reason") or "").strip()
+        user = request.user if request.user.is_authenticated else None
+        try:
+            with transaction.atomic():
+                supply = Supply.objects.select_for_update().get(pk=self.get_object().pk)
+                if supply.status == Supply.Status.CANCELLED:
+                    raise ValueError("This supply is already cancelled.")
+                bill = supply.purchase_invoice
+                if bill and bill.payments_made.filter(status="paid").exists():
+                    raise ValueError("The invoice for this supply has payments. Cancel those payments first.")
+
+                _take_back_stock(supply, user, f"Cancelled supply {supply.reference}")
+
+                if bill and bill.status != SalesInvoice.Status.CANCELLED:
+                    bill.status = SalesInvoice.Status.CANCELLED
+                    bill.save(update_fields=["status", "updated_at"])
+
+                supply.status = Supply.Status.CANCELLED
+                if reason:
+                    supply.notes = f"{supply.notes}\nCancelled: {reason}".strip()
+                supply.save(update_fields=["status", "notes", "updated_at"])
+        except ValueError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        self._log(request, "supply_cancelled", supply, f"Cancelled supply {supply.reference}. {reason}")
+        supply = self.get_queryset().get(pk=supply.pk)
+        return Response(SupplySerializer(supply, context=self.get_serializer_context()).data)
+
+    # ---------- generate invoice ----------
+    @action(detail=True, methods=["post"])
+    def generate_invoice(self, request, pk=None):
+        """
+        POST /api/pos/supplies/{id}/generate_invoice/
+        body (all optional): { "tax_rate": 16, "due_date": "YYYY-MM-DD" }
+        Creates a purchase invoice listing every product on the supply. If one already exists,
+        it is returned instead, so clicking twice never creates a duplicate.
+        """
+        supply = self.get_object()
+        if supply.status == Supply.Status.CANCELLED:
+            return Response({"error": "A cancelled supply can't be invoiced."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        bill = supply.purchase_invoice
+        ctx = self.get_serializer_context()
+        if bill and bill.status != SalesInvoice.Status.CANCELLED:
+            return Response(SalesInvoiceSerializer(bill, context=ctx).data)
+
+        try:
+            tax_rate = _parse_price(request.data.get("tax_rate")) or Decimal("0.00")
+            due = _parse_date(request.data.get("due_date"), None)
+        except ValueError:
+            return Response({"error": "Enter a valid tax rate and due date (YYYY-MM-DD)."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if tax_rate > 100:
+            return Response({"error": "Tax rate cannot be more than 100%."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if supply.total_cost <= 0:
+            return Response({"error": "Enter unit costs on the supply before generating an invoice."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if due and due < supply.supply_date:
+            return Response({"error": "Due date cannot be earlier than the supply date."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            bill = build_supply_bill(supply, tax_rate=tax_rate, due_date=due)
+
+        self._log(request, "supply_invoiced", supply,
+                  f"Generated invoice {bill.invoice_number} for supply {supply.reference}")
+        return Response(SalesInvoiceSerializer(bill, context=ctx).data, status=status.HTTP_201_CREATED)
+

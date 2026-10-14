@@ -25,6 +25,7 @@ export const all_routes = {
   permissions:"/menu-permissions",
   reports:"/reports",
   store:"/store",
+  supplies:"/supplies",
  
   customers: "/customers",
   users: "/users",

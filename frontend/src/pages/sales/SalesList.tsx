@@ -42,11 +42,11 @@ const COLUMNS = [
   { key: "created_at",    label: "Date" },
 ] as const;
 
-function exportCSV(rows: any[]) {
-  const headers = COLUMNS.map(c => c.label);
+function exportCSV(rows: any[], cols: readonly { key: string; label: string }[]) {
+  const headers = cols.map(c => c.label);
   const lines = [
     headers.join(","),
-    ...rows.map(r => COLUMNS.map(c => `"${String(r[c.key] ?? "").replace(/"/g, '""')}"`).join(",")),
+    ...rows.map(r => cols.map(c => `"${String(r[c.key] ?? "").replace(/"/g, '""')}"`).join(",")),
   ];
   const blob = new Blob([lines.join("\n")], { type: "text/csv" });
   const a = document.createElement("a");
@@ -55,9 +55,9 @@ function exportCSV(rows: any[]) {
   a.click();
 }
 
-function exportExcel(rows: any[]) {
-  const headers = COLUMNS.map(c => c.label);
-  const data = [headers, ...rows.map(r => COLUMNS.map(c => String(r[c.key] ?? "")))];
+function exportExcel(rows: any[], cols: readonly { key: string; label: string }[]) {
+  const headers = cols.map(c => c.label);
+  const data = [headers, ...rows.map(r => cols.map(c => String(r[c.key] ?? "")))];
   const ws = XLSX.utils.aoa_to_sheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Sales");
@@ -80,6 +80,8 @@ export default function SalesList() {
     const { isHO, branches } = useBranchAccess();
   const [branchFilter, setBranchFilter] = useState("");
   const [byBranch, setByBranch] = useState<any[]>([]);
+  const showProfit = sales.some(s => s.profit !== undefined);
+const visibleColumns = COLUMNS.filter(c => c.key !== "profit" || showProfit);
 
     const load = useCallback(async () => {
     setLoading(true);
@@ -146,10 +148,10 @@ const totalProfit = sales
             <button className="btn btn-outline-secondary btn-sm" onClick={load} disabled={loading}>
               <i className={`ti ti-refresh me-1 ${loading ? "fa-spin" : ""}`} />Refresh
             </button>
-            <button className="btn btn-outline-success btn-sm" onClick={() => exportCSV(filtered)} disabled={!filtered.length}>
+            <button className="btn btn-outline-success btn-sm" onClick={() => exportCSV(filtered,visibleColumns)} disabled={!filtered.length}>
               <i className="ti ti-file-text me-1" />CSV
             </button>
-            <button className="btn btn-outline-success btn-sm" onClick={() => exportExcel(filtered)} disabled={!filtered.length}>
+            <button className="btn btn-outline-success btn-sm" onClick={() => exportExcel(filtered,visi)} disabled={!filtered.length}>
               <i className="ti ti-table me-1" />Excel
             </button>
            
@@ -166,7 +168,7 @@ const totalProfit = sales
             { label: "Total Revenue", value: money(totalRevenue),                                                           icon: "ti-cash",          bg: "bg-success-gradient-100", color: "text-success" },
             { label: "Outstanding",   value: money(totalOutstanding),                                                       icon: "ti-alert-triangle",bg: "bg-danger-gradient-100",  color: "text-danger" },
             { label: "Total Profit",  value: money(totalProfit),                                                            icon: "ti-bar-chart",     bg: "bg-secondary-gradient-100", color: "text-secondary" },
-          ];
+          ].filter(t => t.label !== "Total Profit" || showProfit);
           return (
             <div className="row g-3 mb-4">
               {tiles.map(s => (
@@ -250,8 +252,7 @@ const totalProfit = sales
                 <table className="table table-hover mb-0 fs-13">
                   <thead className="table-light">
                     <tr>
-                      {COLUMNS.map(c => <th key={c.key} className="text-nowrap">{c.label}</th>)}
-                      <th />
+{visibleColumns.map(c => <th key={c.key} className="text-nowrap">{c.label}</th>)}                      <th />
                     </tr>
                   </thead>
                   <tbody>
@@ -282,7 +283,9 @@ const totalProfit = sales
                         <td className={`text-nowrap fw-semibold ${parseFloat(s.balance_due) > 0 ? "text-danger" : "text-muted"}`}>{money(s.balance_due)}</td>
                        
                         
-<td className={`text-nowrap fw-semibold ${parseFloat(s.profit) < 0 ? "text-danger" : "text-success"}`}>{money(s.profit)}</td>
+{showProfit && (
+  <td className={`text-nowrap fw-semibold ${parseFloat(s.profit) < 0 ? "text-danger" : "text-success"}`}>{money(s.profit)}</td>
+)}
  <td className="text-muted text-nowrap">{fmtDate(s.created_at)}</td>
                         <td>
                         <button className="btn btn-sm btn-outline-primary py-1 px-2 fs-11" onClick={() => setOpenId(s.id)}>

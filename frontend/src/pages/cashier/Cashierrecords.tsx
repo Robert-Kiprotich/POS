@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import * as XLSX from "xlsx";
 import API from "../../services/api";
+import { useBranchAccess } from "../../hooks/useBranchAccess";
 
 const CATEGORIES: Record<string, string> = {
   transport: "Transport",
@@ -86,18 +87,36 @@ const emptyForm = {
   receipt_number: "",
   branch: "",
 };
+const emptyDeposit = {
+  amount: "",
+  deposit_date: iso(new Date()),
+  deposited_by: "",
+  branch: "",
+};
 
 export default function CashierRecords() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [branches, setBranches] = useState<any[]>([]);
 
-  const [tab, setTab] = useState<"sales" | "expenses">("sales");
+  const [tab, setTab] = useState<"sales" | "expenses" | "deposits">("sales");
   const [preset, setPreset] = useState("today");
   const [[dateFrom, dateTo], setRange] = useState<[string, string]>(presetRange("today"));
   const [cashier, setCashier] = useState("");
   const [search, setSearch] = useState("");
   const [expenseStatus, setExpenseStatus] = useState("all");
+  const { branches: accessBranches, isHO, userBranchId } = useBranchAccess();
+
+  // Deposits
+  const [deposits, setDeposits] = useState<any[]>([]);
+  const [depositsLoading, setDepositsLoading] = useState(true);
+  const [branchFilter, setBranchFilter] = useState<number | "">("");
+  const [users, setUsers] = useState<any[]>([]);
+  const [showDepositForm, setShowDepositForm] = useState(false);
+  const [editingDepositId, setEditingDepositId] = useState<number | null>(null);
+  const [depositForm, setDepositForm] = useState<any>(emptyDeposit);
+  const [depositSaving, setDepositSaving] = useState(false);
+  const [depositError, setDepositError] = useState("");
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -119,6 +138,33 @@ export default function CashierRecords() {
   const [actionError, setActionError] = useState("");
 
   const isAdmin = !!data?.is_admin;
+  const canPickBranch = isHO || isAdmin; // sees all branches; everyone else is locked to their own
+
+  const loadDeposits = useCallback(async () => {
+    setDepositsLoading(true);
+    try {
+      const params: any = { date_from: dateFrom, date_to: dateTo, page_size: 1000 };
+      const b = canPickBranch ? branchFilter : userBranchId;
+      if (b) params.branch = b;
+      const res = await API.get("deposits/", { params });
+      setDeposits(res.data?.results || res.data?.data || (Array.isArray(res.data) ? res.data : []));
+    } catch (err) {
+      console.error("Error loading deposits:", err);
+    } finally {
+      setDepositsLoading(false);
+    }
+  }, [dateFrom, dateTo, branchFilter, canPickBranch, userBranchId]);
+
+  useEffect(() => { loadDeposits(); }, [loadDeposits]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await API.get("users/");
+        setUsers(res.data?.results || res.data?.data || (Array.isArray(res.data) ? res.data : []));
+      } catch (err) { console.error("Error loading users:", err); }
+    })();
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -136,8 +182,7 @@ export default function CashierRecords() {
   }, [dateFrom, dateTo, cashier]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { setPage(1); }, [tab, search, expenseStatus, dateFrom, dateTo, cashier]);
-
+  useEffect(() => { setPage(1); }, [tab, search, expenseStatus, dateFrom, dateTo, cashier, branchFilter]);
   useEffect(() => {
     (async () => {
       try {
@@ -174,7 +219,17 @@ export default function CashierRecords() {
     );
   }, [data, search, expenseStatus]);
 
-  const rows = tab === "sales" ? sales : expenses;
+  const depositRows: any[] = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return deposits.filter((d: any) =>
+      !q ||
+      (d.deposited_by_name || "").toLowerCase().includes(q) ||
+      (d.branch_name || "").toLowerCase().includes(q)
+    );
+  }, [deposits, search]);
+
+  const busy = tab === "deposits" ? depositsLoading : loading;
+  const rows: any[] = tab === "sales" ? sales : tab === "expenses" ? expenses : depositRows;
   const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
   const pageRows = rows.slice((page - 1) * pageSize, page * pageSize);
 
@@ -184,14 +239,77 @@ export default function CashierRecords() {
       download([
         ["Order #", "Date", "Customer", "Cashier", "Branch", "Type", "Status", "Total", "Paid", "Balance", "Paid via"],
         ...sales.map(s => [s.order_number, fmtDateTime(s.created_at), s.customer_name, s.cashier_name, s.branch_name,
-          s.sale_type, s.status, s.total_amount, s.amount_paid, s.balance_due, s.methods.join(", ")]),
+          s.sale_type, s.status, s.total_amount, s.amount_paid, s.balance_due, (s.methods || []).join(", ")]),
       ], "cashier_sales", kind);
+    } else if (tab === "expenses") {
+      download([
+        ["Date", "Cashier", "Category", "Description", "Receipt #", "Amount", "Status", "Review note"],
+        ...expenses.map(e => [fmtDate(e.expense_date), e.cashier_name, e.category_display, e.description,
+          e.receipt_number, e.amount, e.status_display, e.review_note]),
+      ], "petty_cash", kind);
     } else {
       download([
-        ["Date", "Cashier", "Branch", "Category", "Description", "Receipt #", "Amount", "Status"],
-        ...expenses.map(e => [fmtDate(e.expense_date), e.cashier_name, e.branch_name, e.category_display,
-          e.description, e.receipt_number, e.amount, e.status_display]),
-      ], "petty_cash", kind);
+        ["Date", "Branch", "Deposited by", "Amount"],
+        ...depositRows.map(d => [fmtDate(d.deposit_date), d.branch_name, d.deposited_by_name, d.amount]),
+      ], "deposits", kind);
+    }
+  }
+
+  // ── Deposit create / edit ───────────────────────────────────────────────
+  const depositorOptions = users.filter(
+    u => !depositForm.branch || String(u.branch) === String(depositForm.branch)
+  );
+  const userLabel = (u: any) => `${u.firstname || ""} ${u.lastname || ""}`.trim() || u.username;
+
+  function openDepositCreate() {
+    setEditingDepositId(null);
+    setDepositForm({
+      ...emptyDeposit,
+      deposit_date: iso(new Date()),
+      branch: canPickBranch ? (branchFilter ? String(branchFilter) : "") : String(userBranchId ?? ""),
+    });
+    setDepositError("");
+    setShowDepositForm(true);
+  }
+
+  function openDepositEdit(d: any) {
+    setEditingDepositId(d.id);
+    setDepositForm({
+      amount: String(d.amount ?? ""),
+      deposit_date: d.deposit_date,
+      deposited_by: d.deposited_by ? String(d.deposited_by) : "",
+      branch: d.branch ? String(d.branch) : "",
+    });
+    setDepositError("");
+    setShowDepositForm(true);
+  }
+
+  async function handleDepositSubmit() {
+    setDepositError("");
+    if (!depositForm.branch) return setDepositError("Select the branch this deposit belongs to.");
+    if (!depositForm.deposited_by) return setDepositError("Select who made the deposit.");
+    if (!depositForm.amount || Number(depositForm.amount) <= 0) return setDepositError("Enter an amount greater than zero.");
+    if (!depositForm.deposit_date) return setDepositError("Choose the deposit date.");
+    if (depositForm.deposit_date > iso(new Date())) return setDepositError("Deposit date cannot be in the future.");
+
+    const body = {
+      branch: Number(depositForm.branch),
+      deposited_by: Number(depositForm.deposited_by),
+      amount: depositForm.amount,
+      deposit_date: depositForm.deposit_date,
+    };
+
+    setDepositSaving(true);
+    try {
+      if (editingDepositId) await API.patch(`deposits/${editingDepositId}/`, body);
+      else await API.post("deposits/", body);
+      setShowDepositForm(false);
+      loadDeposits();
+    } catch (err: any) {
+      console.error("Error saving deposit:", err);
+      setDepositError(errorMessage(err, "Could not save this deposit. Please try again."));
+    } finally {
+      setDepositSaving(false);
     }
   }
 
@@ -241,8 +359,9 @@ export default function CashierRecords() {
 
     setSaving(true);
     try {
-      if (editingId) await API.patch(`petty-cash/${editingId}/`, body);
-      else await API.post("petty-cash/", body);
+       const multipart = { headers: { "Content-Type": "multipart/form-data" } };
+      if (editingId) await API.patch(`petty-cash/${editingId}/`, body,multipart);
+      else await API.post("petty-cash/", body,multipart);
       setShowForm(false);
       load();
     } catch (err: any) {
@@ -281,11 +400,12 @@ export default function CashierRecords() {
 
   async function confirmDelete() {
     if (!deleteTarget) return;
+    const isDeposit = deleteTarget._kind === "deposit";
     setDialogBusy(true); setDialogError("");
     try {
-      await API.delete(`petty-cash/${deleteTarget.id}/`);
+      await API.delete(isDeposit ? `deposits/${deleteTarget.id}/` : `petty-cash/${deleteTarget.id}/`);
       setDeleteTarget(null);
-      load();
+      if (isDeposit) loadDeposits(); else load();
     } catch (err: any) {
       setDialogError(errorMessage(err));
     } finally {
@@ -312,8 +432,8 @@ export default function CashierRecords() {
             </p>
           </div>
           <div className="d-flex gap-2 flex-wrap">
-            <button className="btn btn-outline-secondary btn-sm" onClick={load} disabled={loading}>
-              <i className={`ti ti-refresh me-1 ${loading ? "fa-spin" : ""}`} />Refresh
+            <button className="btn btn-outline-secondary btn-sm" onClick={() => { load(); loadDeposits(); }} disabled={loading || depositsLoading}>
+              <i className={`ti ti-refresh me-1 ${loading || depositsLoading ? "fa-spin" : ""}`} />Refresh
             </button>
             <button className="btn btn-outline-success btn-sm" onClick={() => exportRows("csv")} disabled={!rows.length}>
               <i className="ti ti-file-text me-1" />CSV
@@ -321,9 +441,15 @@ export default function CashierRecords() {
             <button className="btn btn-outline-success btn-sm" onClick={() => exportRows("xlsx")} disabled={!rows.length}>
               <i className="ti ti-table me-1" />Excel
             </button>
-            <button className="btn btn-primary btn-sm" onClick={openCreate}>
-              <i className="ti ti-plus me-1" />Add Petty Cash
-            </button>
+            {tab === "deposits" ? (
+              <button className="btn btn-primary btn-sm" onClick={openDepositCreate}>
+                <i className="ti ti-plus me-1" />Record Deposit
+              </button>
+            ) : (
+              <button className="btn btn-primary btn-sm" onClick={openCreate}>
+                <i className="ti ti-plus me-1" />Record Expense
+              </button>
+            )}
           </div>
         </div>
 
@@ -342,10 +468,24 @@ export default function CashierRecords() {
           {isAdmin && (
             <select className="form-select form-select-sm fs-13" style={{ width: 190 }} value={cashier} onChange={e => setCashier(e.target.value)}>
               <option value="">All cashiers</option>
-              {data.cashiers.map((c: any) => (
+              {(data?.cashiers ?? []).map((c: any) => (
                 <option key={c.id} value={c.id}>{`${c.firstname} ${c.lastname}`.trim() || c.username}</option>
               ))}
             </select>
+          )}
+
+          {tab === "deposits" && (
+            canPickBranch ? (
+              <select className="form-select form-select-sm fs-13" style={{ width: 190 }}
+                value={branchFilter} onChange={e => setBranchFilter(e.target.value ? Number(e.target.value) : "")}>
+                <option value="">All branches</option>
+                {accessBranches.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            ) : (
+              <span className="badge bg-primary-transparent text-primary fs-12">
+                {accessBranches.find((b: any) => b.id === userBranchId)?.name || "Your branch"}
+              </span>
+            )
           )}
         </div>
 
@@ -375,7 +515,7 @@ export default function CashierRecords() {
           </div>
         )}
 
-        {summary && data.payment_breakdown.length > 0 && (
+        {summary && (data?.payment_breakdown?.length ?? 0) > 0 && (
           <div className="d-flex gap-2 flex-wrap mb-3 fs-13">
             <span className="text-muted align-self-center">Received by method:</span>
             {data.payment_breakdown.map((m: any) => (
@@ -390,6 +530,11 @@ export default function CashierRecords() {
         <div className="card shadow-none border">
           <div className="card-header border-bottom py-3 d-flex align-items-center justify-content-between flex-wrap gap-2">
             <ul className="nav nav-pills gap-1">
+              <li className="nav-item">
+                <button className={`nav-link btn-sm py-1 ${tab === "deposits" ? "active" : ""}`} onClick={() => setTab("deposits")}>
+                  <i className="ti ti-building-bank me-1" />Deposits <span className="ms-1 opacity-75">({deposits.length})</span>
+                </button>
+              </li>
               <li className="nav-item">
                 <button className={`nav-link btn-sm py-1 ${tab === "sales" ? "active" : ""}`} onClick={() => setTab("sales")}>
                   <i className="ti ti-receipt me-1" />Sales <span className="ms-1 opacity-75">({data?.sales?.length ?? 0})</span>
@@ -413,7 +558,7 @@ export default function CashierRecords() {
               <div className="input-group input-group-flat" style={{ maxWidth: 240 }}>
                 <span className="input-group-text bg-transparent border-end-0"><i className="ti ti-search text-muted" /></span>
                 <input type="text" className="form-control border-start-0 ps-1 fs-13"
-                  placeholder={tab === "sales" ? "Search order, customer…" : "Search description, receipt…"}
+                  placeholder={tab === "sales" ? "Search order, customer…" : tab === "expenses" ? "Search description, receipt…" : "Search depositor, branch…"}
                   value={search} onChange={e => setSearch(e.target.value)} />
                 {search && <button className="btn btn-sm btn-link text-muted px-2" onClick={() => setSearch("")}><i className="ti ti-x" /></button>}
               </div>
@@ -421,18 +566,23 @@ export default function CashierRecords() {
           </div>
 
           <div className="card-body p-0">
-            {loading ? (
+            {busy ? (
               <div className="d-flex align-items-center justify-content-center py-5 text-muted">
                 <span className="spinner-border spinner-border-sm me-2" />Loading records…
               </div>
             ) : rows.length === 0 ? (
               <div className="d-flex flex-column align-items-center justify-content-center py-5 text-muted">
-                <i className={`ti ${tab === "sales" ? "ti-receipt" : "ti-wallet"} fs-1 mb-2`} />
+                <i className={`ti ${tab === "sales" ? "ti-receipt" : tab === "expenses" ? "ti-wallet" : "ti-building-bank"} fs-1 mb-2`} />
                 <p className="fs-14 mb-0">
-                  {tab === "sales" ? "No sales in this period." : "No petty cash expenses in this period."}
+                  {tab === "sales" ? "No sales in this period."
+                    : tab === "expenses" ? "No petty cash expenses in this period."
+                    : "No deposits in this period."}
                 </p>
-                {tab === "expenses" && !search && expenseStatus === "all" &&
-                  <button className="btn btn-sm btn-primary mt-3" onClick={openCreate}><i className="ti ti-plus me-1" />Add Petty Cash</button>}
+                {tab === "deposits" && !search && (
+                  <button className="btn btn-sm btn-primary mt-3" onClick={openDepositCreate}>
+                    <i className="ti ti-plus me-1" />Record Deposit
+                  </button>
+                )}
               </div>
             ) : tab === "sales" ? (
               <div className="table-responsive">
@@ -456,13 +606,13 @@ export default function CashierRecords() {
                         <td className="text-end fw-semibold text-nowrap">{money(s.total_amount)}</td>
                         <td className="text-end text-success text-nowrap">{money(s.amount_paid)}</td>
                         <td className={`text-end text-nowrap ${Number(s.balance_due) > 0 ? "text-danger fw-semibold" : "text-muted"}`}>{money(s.balance_due)}</td>
-                        <td className="text-nowrap">{s.methods.length ? s.methods.join(", ") : <span className="text-muted">—</span>}</td>
+                        <td className="text-nowrap">{s.methods?.length ? s.methods.join(", ") : <span className="text-muted">—</span>}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-            ) : (
+            ) : tab === "expenses" ? (
               <div className="table-responsive">
                 <table className="table table-hover mb-0 fs-13">
                   <thead className="table-light">
@@ -522,14 +672,49 @@ export default function CashierRecords() {
                   </tbody>
                 </table>
               </div>
+            ) : (
+              <div className="table-responsive">
+                <table className="table table-hover mb-0 fs-13">
+                  <thead className="table-light">
+                    <tr>
+                      <th>Date</th>
+                      {canPickBranch && <th>Branch</th>}
+                      <th>Deposited by</th>
+                      <th className="text-end">Amount</th>
+                      {isAdmin && <th className="text-end">Actions</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageRows.map((d: any) => (
+                      <tr key={d.id}>
+                        <td className="text-nowrap">{fmtDate(d.deposit_date)}</td>
+                        {canPickBranch && <td className="text-nowrap">{d.branch_name}</td>}
+                        <td className="text-nowrap">{d.deposited_by_name}</td>
+                        <td className="text-end fw-semibold text-nowrap">{money(d.amount)}</td>
+                        {isAdmin && (
+                          <td className="text-end text-nowrap">
+                            <button className="btn btn-sm btn-icon btn-outline-secondary me-1" title="Edit" onClick={() => openDepositEdit(d)}>
+                              <i className="ti ti-edit" />
+                            </button>
+                            <button className="btn btn-sm btn-icon btn-outline-danger" title="Delete"
+                              onClick={() => { setDialogError(""); setDeleteTarget({ ...d, _kind: "deposit" }); }}>
+                              <i className="ti ti-trash" />
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
 
-          {!loading && rows.length > 0 && (
+          {!busy && rows.length > 0 && (
             <div className="card-footer border-top py-2 px-3 d-flex align-items-center justify-content-between flex-wrap gap-2 fs-12 text-muted">
               <span>
                 Showing <strong>{(page - 1) * pageSize + 1}–{Math.min(page * pageSize, rows.length)}</strong> of <strong>{rows.length}</strong>
-                {tab === "expenses" && <> · Total <strong>{money(rows.reduce((s, e) => s + Number(e.amount), 0))}</strong></>}
+                {(tab === "expenses" || tab === "deposits") && <> · Total <strong>{money(rows.reduce((s, e) => s + Number(e.amount), 0))}</strong></>}
               </span>
               <div className="d-flex align-items-center gap-1">
                 <select className="form-select form-select-sm fs-12 w-auto" value={pageSize}
@@ -624,6 +809,60 @@ export default function CashierRecords() {
         </>
       )}
 
+      {/* ================= Deposit offcanvas ================= */}
+      {showDepositForm && (
+        <>
+          <div className="offcanvas-backdrop fade show" onClick={() => !depositSaving && setShowDepositForm(false)} />
+          <div className="offcanvas offcanvas-end show" style={{ visibility: "visible", width: 420 }} tabIndex={-1}>
+            <div className="offcanvas-header border-bottom">
+              <h5 className="offcanvas-title fw-semibold">{editingDepositId ? "Edit Deposit" : "Record Deposit"}</h5>
+              <button type="button" className="btn-close" onClick={() => !depositSaving && setShowDepositForm(false)} />
+            </div>
+            <div className="offcanvas-body">
+              {depositError && <div className="alert alert-danger fs-13 py-2">{depositError}</div>}
+
+              <div className="mb-3">
+                <label className="form-label fs-13 fw-medium">Branch <span className="text-danger">*</span></label>
+                <select className="form-select" value={depositForm.branch} disabled={!canPickBranch}
+                  onChange={e => setDepositForm((f: any) => ({ ...f, branch: e.target.value, deposited_by: "" }))}>
+                  <option value="">Select branch…</option>
+                  {accessBranches.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+
+              <div className="mb-3">
+                <label className="form-label fs-13 fw-medium">Deposited by <span className="text-danger">*</span></label>
+                <select className="form-select" value={depositForm.deposited_by}
+                  onChange={e => setDepositForm((f: any) => ({ ...f, deposited_by: e.target.value }))}>
+                  <option value="">Select person…</option>
+                  {depositorOptions.map((u: any) => <option key={u.id} value={u.id}>{userLabel(u)}</option>)}
+                </select>
+              </div>
+
+              <div className="row g-2 mb-3">
+                <div className="col-6">
+                  <label className="form-label fs-13 fw-medium">Amount (KES) <span className="text-danger">*</span></label>
+                  <input type="number" min={0} step="0.01" className="form-control" value={depositForm.amount}
+                    onChange={e => setDepositForm((f: any) => ({ ...f, amount: e.target.value }))} />
+                </div>
+                <div className="col-6">
+                  <label className="form-label fs-13 fw-medium">Date</label>
+                  <input type="date" className="form-control" max={iso(new Date())} value={depositForm.deposit_date}
+                    onChange={e => setDepositForm((f: any) => ({ ...f, deposit_date: e.target.value }))} />
+                </div>
+              </div>
+            </div>
+            <div className="offcanvas-footer border-top p-3 d-flex justify-content-end gap-2">
+              <button className="btn btn-outline-secondary btn-sm" onClick={() => setShowDepositForm(false)} disabled={depositSaving}>Cancel</button>
+              <button className="btn btn-primary btn-sm" onClick={handleDepositSubmit} disabled={depositSaving}>
+                {depositSaving ? <span className="spinner-border spinner-border-sm me-1" /> : <i className="ti ti-check me-1" />}
+                {editingDepositId ? "Save changes" : "Record deposit"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* ================= Delete dialog ================= */}
       {deleteTarget && (
         <>
@@ -632,19 +871,24 @@ export default function CashierRecords() {
             <div className="modal-dialog modal-dialog-centered" onClick={e => e.stopPropagation()}>
               <div className="modal-content">
                 <div className="modal-header border-bottom">
-                  <h5 className="modal-title fw-semibold">Delete expense</h5>
+                  <h5 className="modal-title fw-semibold">{deleteTarget._kind === "deposit" ? "Delete deposit" : "Delete expense"}</h5>
                   <button type="button" className="btn-close" onClick={() => setDeleteTarget(null)} disabled={dialogBusy} />
                 </div>
                 <div className="modal-body">
                   {dialogError && <div className="alert alert-danger fs-13 py-2">{dialogError}</div>}
                   <p className="mb-0 fs-14">
-                    Delete <strong>{money(deleteTarget.amount)}</strong> ({deleteTarget.description})? This can't be undone.
+                    {deleteTarget._kind === "deposit" ? (
+                      <>Delete deposit of <strong>{money(deleteTarget.amount)}</strong> by {deleteTarget.deposited_by_name} on {fmtDate(deleteTarget.deposit_date)}? This can't be undone.</>
+                    ) : (
+                      <>Delete <strong>{money(deleteTarget.amount)}</strong> ({deleteTarget.description})? This can't be undone.</>
+                    )}
                   </p>
                 </div>
                 <div className="modal-footer border-top">
                   <button className="btn btn-outline-secondary btn-sm" onClick={() => setDeleteTarget(null)} disabled={dialogBusy}>Cancel</button>
                   <button className="btn btn-danger btn-sm" onClick={confirmDelete} disabled={dialogBusy}>
-                    {dialogBusy ? <span className="spinner-border spinner-border-sm me-1" /> : <i className="ti ti-trash me-1" />}Delete expense
+                    {dialogBusy ? <span className="spinner-border spinner-border-sm me-1" /> : <i className="ti ti-trash me-1" />}
+                    {deleteTarget._kind === "deposit" ? "Delete deposit" : "Delete expense"}
                   </button>
                 </div>
               </div>

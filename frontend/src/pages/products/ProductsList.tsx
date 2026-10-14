@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef,useMemo } from "react";
 import * as XLSX from "xlsx";
 import { Link } from "react-router";
 import API from "../../services/api";
@@ -28,6 +28,8 @@ export const ALL_COLUMNS = [
   // Classification
   { key: "category",          label: "Category",       group: "Classification" },
   { key: "description",       label: "Description",    group: "Classification" },
+  { key: "manufacturer",      label: "Manufacturer",   group: "Identifiers" },   // ← add
+{ key: "pack_size",         label: "Pack Size",      group: "Identifiers" },
   // Pricing
   { key: "cost_price",        label: "Cost Price",     group: "Pricing" },
   { key: "retail_price",      label: "Retail Price",   group: "Pricing" },
@@ -49,7 +51,7 @@ export const ALL_COLUMNS = [
 type ColKey = typeof ALL_COLUMNS[number]["key"];
 
 const DEFAULT_VISIBLE: ColKey[] = [
-  "name", "item_number", "category", "retail_price", "total_stock", "is_active",
+  "name", "item_number", "category","manufacturer", "pack_size", "retail_price", "total_stock", "is_active",
 ];
 
 const BOOL_KEYS = new Set<ColKey>(["is_active"]);
@@ -100,6 +102,8 @@ export interface ProductForm {
   item_number: string;
   category: string | number;
   description: string;
+  manufacturer: string;   // ← add
+  pack_size: string;      // ← add
   cost_price: string;
   retail_price: string;
   wholesale_price: string;
@@ -143,22 +147,48 @@ export default function ProductsList() {
     const [branchPrices, setBranchPrices] = useState<any[]>([]);
   const [loadingBP, setLoadingBP]       = useState(false);
     const { isHO, userBranchId, loading: loadingAccess } = useBranchAccess();
+    const [showMfrList, setShowMfrList]         = useState(false);   // ← add
 
   const [form, setForm] = useState<ProductForm>({
-    name: "",
-    item_number: "",
-    category: "",
-    description: "",
-    cost_price: "0",
-    retail_price: "0",
-    wholesale_price: "0",
-    tax_rate: "16",
-    expiry_date: "",
-    is_active: true,
-    initial_quantity: "0",
-    reorder_level: "5",
-  });
+  name: "",
+  item_number: "",
+  category: "",
+  description: "",
+  manufacturer: "",       // ← add
+  pack_size: "",          // ← add
+  cost_price: "0",
+  retail_price: "0",
+  wholesale_price: "0",
+  tax_rate: "16",
+  expiry_date: "",
+  is_active: true,
+  initial_quantity: "0",
+  reorder_level: "5",
+});
+  const manufacturerOptions = useMemo(
+    () => Array.from(new Set(products.map(p => (p.manufacturer || "").trim()).filter(Boolean)))
+          .sort((a, b) => a.localeCompare(b)),
+    [products]
+  );
 
+  const mfrSuggestions = useMemo(() => {
+    const q = form.manufacturer.trim().toLowerCase();
+    if (!q) return [];
+    const starts   = manufacturerOptions.filter(m => m.toLowerCase().startsWith(q));
+    const contains = manufacturerOptions.filter(
+      m => !m.toLowerCase().startsWith(q) && m.toLowerCase().includes(q)
+    );
+    return [...starts, ...contains]
+      .filter(m => m.toLowerCase() !== q)
+      .slice(0, 6);
+  }, [form.manufacturer, manufacturerOptions]);
+
+  const packSizeOptions = useMemo(() => {
+    const defaults = ["50g", "100g", "250g", "500g", "1kg", "5kg", "10kg", "25kg",
+                      "50ml", "100ml", "250ml", "500ml", "1L", "5L"];
+    const used = products.map(p => (p.pack_size || "").trim()).filter(Boolean);
+    return Array.from(new Set([...defaults, ...used]));
+  }, [products]);
   /** Normalise a raw API product object into the flat shape expected */
   function normalizeProduct(p: any): any {
     const catName = (c: any) => {
@@ -173,6 +203,8 @@ export default function ProductsList() {
       category:           p.category_name ?? catName(p.category),
       category_id:        p.category?.id ?? (typeof p.category === "number" ? p.category : ""),
       description:        p.description        ?? "",
+       manufacturer:       p.manufacturer       ?? "",   // ← add
+  pack_size:          p.pack_size          ?? "",
       cost_price:         p.cost_price         ?? "0",
       retail_price:       p.retail_price       ?? "0",
       wholesale_price:    p.wholesale_price    ?? "0",
@@ -292,45 +324,49 @@ const load = useCallback(async (silent = false) => {
   const orderedCols = ALL_COLUMNS.map(c => c.key).filter(k => visibleCols.includes(k));
 
   // ── Offcanvas Handlers ──────────────────────────────────────────────────────
-  const handleAdd = () => {
-    setMode("add");
-    setSelectedProduct(null);
-    setError("");
-    setForm({
-      name: "",
-      item_number: "",
-      category: categoriesList[0]?.id ?? "",
-      description: "",
-      cost_price: "0",
-      retail_price: "0",
-      wholesale_price: "0",
-      tax_rate: "16",
-      expiry_date: "",
-      is_active: true,
-       initial_quantity: "0",
-      reorder_level: "5",
-    });
-  };
+const handleAdd = () => {
+  setMode("add");
+  setSelectedProduct(null);
+  setError("");
+  setForm({
+    name: "",
+    item_number: "",
+    category: categoriesList[0]?.id ?? "",
+    description: "",
+    manufacturer: "",     // ← add
+    pack_size: "",        // ← add
+    cost_price: "0",
+    retail_price: "0",
+    wholesale_price: "0",
+    tax_rate: "16",
+    expiry_date: "",
+    is_active: true,
+    initial_quantity: "0",
+    reorder_level: "5",
+  });
+};
 
-  const handleEdit = (product: any) => {
-    setMode("edit");
-    setSelectedProduct(product);
-    setError("");
-    setForm({
-      name: product.name ?? "",
-      item_number: product.item_number ?? "",
-      category: product.category_id || product.category || "",
-      description: product.description ?? "",
-      cost_price: String(product.cost_price ?? "0"),
-      retail_price: String(product.retail_price ?? "0"),
-      wholesale_price: String(product.wholesale_price ?? "0"),
-      tax_rate: String(product.tax_rate ?? "0"),
-      expiry_date: product.expiry_date ? product.expiry_date.slice(0, 10) : "",
-      is_active: product.is_active ?? true,
-       initial_quantity: "0",
-      reorder_level: "5",
-    });
-  };
+const handleEdit = (product: any) => {
+  setMode("edit");
+  setSelectedProduct(product);
+  setError("");
+  setForm({
+    name: product.name ?? "",
+    item_number: product.item_number ?? "",
+    category: product.category_id || product.category || "",
+    description: product.description ?? "",
+    manufacturer: product.manufacturer ?? "",   // ← add
+    pack_size: product.pack_size ?? "",         // ← add
+    cost_price: String(product.cost_price ?? "0"),
+    retail_price: String(product.retail_price ?? "0"),
+    wholesale_price: String(product.wholesale_price ?? "0"),
+    tax_rate: String(product.tax_rate ?? "0"),
+    expiry_date: product.expiry_date ? product.expiry_date.slice(0, 10) : "",
+    is_active: product.is_active ?? true,
+    initial_quantity: "0",
+    reorder_level: "5",
+  });
+};
 
     const handleView = async (product: any) => {
     setMode("view");
@@ -851,6 +887,31 @@ const load = useCallback(async (silent = false) => {
                 <label className="text-muted fs-12 fw-medium d-block mb-1">DESCRIPTION</label>
                 <span>{selectedProduct.description || <em className="text-muted">No description</em>}</span>
               </div>
+
+              <div>
+  <label className="text-muted fs-12 fw-medium d-block mb-1">PRODUCT NAME</label>
+  <span className="fw-semibold text-dark fs-14">{selectedProduct.name}</span>
+</div>
+<div>
+  <label className="text-muted fs-12 fw-medium d-block mb-1">ITEM NUMBER</label>
+  <span>{selectedProduct.item_number || "—"}</span>
+</div>
+
+{/* ↓ paste here */}
+<div>
+  <label className="text-muted fs-12 fw-medium d-block mb-1">MANUFACTURER</label>
+  <span>{selectedProduct.manufacturer || "—"}</span>
+</div>
+<div>
+  <label className="text-muted fs-12 fw-medium d-block mb-1">PACK SIZE</label>
+  <span>{selectedProduct.pack_size || "—"}</span>
+</div>
+{/* ↑ paste here */}
+
+<div>
+  <label className="text-muted fs-12 fw-medium d-block mb-1">CATEGORY</label>
+  <span>{selectedProduct.category || "—"}</span>
+</div>
               <div>
                 <label className="text-muted fs-12 fw-medium d-block mb-1">RETAIL PRICE</label>
                 <span className="fw-semibold text-success">{fmtMoney(selectedProduct.retail_price)}</span>
@@ -963,7 +1024,74 @@ const load = useCallback(async (silent = false) => {
                   ))}
                 </select>
               </div>
+                                {/* ← end of Category <div> above */}
 
+              <div className="row g-2">
+                <div className="col-6">
+                  <label htmlFor="p-manufacturer" className="form-label fs-13 fw-medium mb-1">Manufacturer</label>
+                  <div className="position-relative">
+                    <input
+                      id="p-manufacturer"
+                      type="text"
+                      autoComplete="off"
+                      className="form-control fs-13"
+                      placeholder="Start typing…"
+                      value={form.manufacturer}
+                      onChange={(e) => {
+                        setForm({ ...form, manufacturer: e.target.value });
+                        setShowMfrList(true);
+                      }}
+                      onFocus={() => setShowMfrList(true)}
+                      onBlur={() => {
+                        setShowMfrList(false);
+                        const typed = form.manufacturer.trim();
+                        const match = manufacturerOptions.find(m => m.toLowerCase() === typed.toLowerCase());
+                        if (match && match !== form.manufacturer) setForm(f => ({ ...f, manufacturer: match }));
+                      }}
+                    />
+                    {showMfrList && mfrSuggestions.length > 0 && (
+                      <ul
+                        className="list-group position-absolute w-100 shadow-sm"
+                        style={{ zIndex: 1060, top: "100%", maxHeight: 200, overflowY: "auto" }}
+                      >
+                        {mfrSuggestions.map(m => (
+                          <li
+                            key={m}
+                            className="list-group-item list-group-item-action fs-13 py-2"
+                            style={{ cursor: "pointer" }}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              setForm({ ...form, manufacturer: m });
+                              setShowMfrList(false);
+                            }}
+                          >
+                            {m}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+
+                <div className="col-6">
+                  <label htmlFor="p-pack-size" className="form-label fs-13 fw-medium mb-1">Pack Size</label>
+                  <input
+                    id="p-pack-size"
+                    type="text"
+                    list="pack-size-options"
+                    autoComplete="off"
+                    className="form-control fs-13"
+                    placeholder="e.g. 250ml"
+                    value={form.pack_size}
+                    onChange={(e) => setForm({ ...form, pack_size: e.target.value })}
+                  />
+                  <datalist id="pack-size-options">
+                    {packSizeOptions.map(s => <option key={s} value={s} />)}
+                  </datalist>
+                </div>
+              </div>
+
+              {/* ↓ Description <div> starts here */}
               <div>
                 <label htmlFor="p-desc" className="form-label fs-13 fw-medium mb-1">Description</label>
                 <textarea

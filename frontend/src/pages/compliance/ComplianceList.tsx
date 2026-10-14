@@ -4,16 +4,22 @@ import { showSuccess, showError, showWarning, showConfirm } from "../../componen
 
 // Keep in sync with ComplianceRecord.DocumentType on the backend
 const TYPE_OPTIONS = [
-  { value: "tax",             label: "Tax Compliance" },
-  { value: "county",          label: "County Government" },
   { value: "business_permit", label: "Business Permit" },
-  { value: "pharmacy_board",  label: "Pharmacy & Poisons Board" },
-  { value: "vet_board",       label: "Kenya Veterinary Board" },
-  { value: "health",          label: "Public Health" },
-  { value: "insurance",       label: "Insurance" },
+  { value: "vmd",             label: "VMD" },
+  { value: "pcpb",            label: "PCPB" },
+  { value: "kephis",          label: "KEPHIS" },
   { value: "other",           label: "Other" },
 ];
 const TYPE_LABEL: Record<string, string> = Object.fromEntries(TYPE_OPTIONS.map(t => [t.value, t.label]));
+
+// Keep in sync with ComplianceRecord.ApplicationStatus on the backend
+const STATUS_OPTIONS = [
+  { value: "new",     label: "New" },
+  { value: "renewal", label: "Renewal" },
+];
+const STATUS_LABEL: Record<string, string> = Object.fromEntries(STATUS_OPTIONS.map(s => [s.value, s.label]));
+const statusBadgeCls = (s?: string) =>
+  `badge ${s === "renewal" ? "bg-info-transparent text-info" : "bg-success-transparent text-success"}`;
 
 const MAX_MB = 10;
 const ACCEPT = ".jpg,.jpeg,.png,.webp,.pdf";
@@ -43,7 +49,14 @@ function extractError(err: any, fallback: string) {
   return field ? `${field}: ${msg}` : fallback;
 }
 
-const emptyForm = { document_type: "tax", title: "", expiry_date: "", notes: "" };
+const emptyForm = {
+  document_type: "business_permit",
+  application_status: "new",
+  title: "",
+  expiry_date: "",
+  next_renewal_date: "",
+  notes: "",
+};
 
 export default function ComplianceList() {
   const [records, setRecords] = useState<any[]>([]);
@@ -104,8 +117,10 @@ export default function ComplianceList() {
     setMode("edit"); setSelected(r); setFile(null); setFormError("");
     setForm({
       document_type: r.document_type,
+      application_status: r.application_status ?? "new",
       title: r.title ?? "",
       expiry_date: r.expiry_date ? r.expiry_date.slice(0, 10) : "",
+      next_renewal_date: r.next_renewal_date ? r.next_renewal_date.slice(0, 10) : "",
       notes: r.notes ?? "",
     });
     setShowOffcanvas(true);
@@ -136,9 +151,11 @@ export default function ComplianceList() {
 
     const fd = new FormData();
     fd.append("document_type", form.document_type);
+    fd.append("application_status", form.application_status);
     fd.append("title", form.title.trim());
     fd.append("notes", form.notes);
-    fd.append("expiry_date", form.expiry_date); // "" clears it on the server
+    fd.append("expiry_date", form.expiry_date);               // "" clears it on the server
+    fd.append("next_renewal_date", form.next_renewal_date);   // "" clears it on the server
     if (file) fd.append("file", file);
 
     setSaving(true);
@@ -191,7 +208,7 @@ export default function ComplianceList() {
         <div className="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
           <div>
             <h4 className="fw-semibold mb-1">Compliance Records</h4>
-            <p className="text-muted fs-13 mb-0">Tax, county government and other regulatory documents.</p>
+            <p className="text-muted fs-13 mb-0">Business permits, VMD, PCPB, KEPHIS and other regulatory documents.</p>
           </div>
           <div className="d-flex gap-2">
             <button className="btn btn-outline-secondary btn-sm" onClick={load} disabled={loading}>
@@ -256,7 +273,9 @@ export default function ComplianceList() {
                       <th className="ps-3">File</th>
                       <th>Title</th>
                       <th>Type</th>
+                      <th>Status</th>
                       <th>Validity</th>
+                      <th>Next Renewal</th>
                       <th>Uploaded By</th>
                       <th>Date Added</th>
                       <th className="text-end pe-3">Actions</th>
@@ -274,7 +293,13 @@ export default function ComplianceList() {
                           </td>
                           <td className="fw-semibold text-dark">{r.title}</td>
                           <td><span className="badge bg-primary-transparent text-primary">{TYPE_LABEL[r.document_type] || r.document_type}</span></td>
+                          <td>
+                            <span className={statusBadgeCls(r.application_status)}>
+                              {STATUS_LABEL[r.application_status] || r.application_status}
+                            </span>
+                          </td>
                           <td><span className={exp.cls}>{exp.label}</span></td>
+                          <td className="text-muted text-nowrap">{r.next_renewal_date ? fmtDate(r.next_renewal_date) : "—"}</td>
                           <td className="text-muted text-nowrap">{r.uploaded_by_name}</td>
                           <td className="text-muted text-nowrap">{fmtDate(r.created_at)}</td>
                           <td className="text-end pe-3">
@@ -341,8 +366,18 @@ export default function ComplianceList() {
                     <span>{TYPE_LABEL[selected.document_type] || selected.document_type}</span>
                   </div>
                   <div>
+                    <label className="text-muted fs-12 fw-medium d-block mb-1">APPLICATION STATUS</label>
+                    <span className={statusBadgeCls(selected.application_status)}>
+                      {STATUS_LABEL[selected.application_status] || selected.application_status}
+                    </span>
+                  </div>
+                  <div>
                     <label className="text-muted fs-12 fw-medium d-block mb-1">VALIDITY</label>
                     <span className={expiryInfo(selected.expiry_date).cls}>{expiryInfo(selected.expiry_date).label}</span>
+                  </div>
+                  <div>
+                    <label className="text-muted fs-12 fw-medium d-block mb-1">NEXT RENEWAL</label>
+                    <span>{selected.next_renewal_date ? fmtDate(selected.next_renewal_date) : <em className="text-muted">Not set</em>}</span>
                   </div>
                   <div>
                     <label className="text-muted fs-12 fw-medium d-block mb-1">NOTES</label>
@@ -364,8 +399,16 @@ export default function ComplianceList() {
                   </div>
 
                   <div>
+                    <label className="form-label fs-13 fw-medium mb-1">Application Status <span className="text-danger">*</span></label>
+                    <select className="form-select fs-13" value={form.application_status}
+                      onChange={e => setForm(f => ({ ...f, application_status: e.target.value }))}>
+                      {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                    </select>
+                  </div>
+
+                  <div>
                     <label className="form-label fs-13 fw-medium mb-1">Title <span className="text-danger">*</span></label>
-                    <input type="text" className="form-control fs-13" placeholder="e.g. KRA Tax Compliance Certificate 2026"
+                    <input type="text" className="form-control fs-13" placeholder="e.g. Single Business Permit 2026"
                       value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} />
                   </div>
 
@@ -393,6 +436,13 @@ export default function ComplianceList() {
                     <input type="date" className="form-control fs-13" value={form.expiry_date}
                       onChange={e => setForm(f => ({ ...f, expiry_date: e.target.value }))} />
                     <div className="fs-11 text-muted mt-1">Leave blank if it doesn't expire.</div>
+                  </div>
+
+                  <div>
+                    <label className="form-label fs-13 fw-medium mb-1">Next Date of Renewal</label>
+                    <input type="date" className="form-control fs-13" value={form.next_renewal_date}
+                      onChange={e => setForm(f => ({ ...f, next_renewal_date: e.target.value }))} />
+                    <div className="fs-11 text-muted mt-1">When this must next be renewed.</div>
                   </div>
 
                   <div>

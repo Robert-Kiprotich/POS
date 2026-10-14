@@ -19,6 +19,7 @@
     "@fullcalendar/timegrid": "^6.1.20",
     "@hello-pangea/dnd": "^18.0.1",
     "@reduxjs/toolkit": "^2.12.0",
+    "@rexymayderio/html-pdf-forge": "^1.4.2",
     "@tabler/icons-webfont": "^3.44.0",
     "antd": "^6.4.3",
     "apexcharts": "^5.14.0",
@@ -26,7 +27,10 @@
     "bootstrap": "^5.3.8",
     "chart.js": "^4.5.1",
     "clipboard-copy": "^4.0.1",
+    "html2canvas": "^1.4.1",
+    "html2pdf.js": "^0.14.0",
     "jquery": "^4.0.0",
+    "jspdf": "^4.2.1",
     "leaflet": "^1.9.4",
     "moment": "^2.30.1",
     "overlayscrollbars": "^2.16.0",
@@ -57,10 +61,14 @@
     "react-star-ratings": "^2.3.0",
     "simplebar-react": "^3.3.2",
     "sip.js": "^0.21.2",
+    "smart-pdf-js": "^1.0.1",
     "sweetalert": "^2.1.2",
     "sweetalert2": "^11.26.25",
     "xlsx": "^0.18.5",
     "yet-another-react-lightbox": "^3.32.0"
+  },
+  "overrides": {
+    "pdfmake": "0.2.10"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

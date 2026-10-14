@@ -66,6 +66,11 @@ class Product(models.Model):
         help_text="Leave blank for non-perishable products.",
     )
     image = models.ImageField(upload_to="products/", blank=True, null=True)
+    manufacturer = models.CharField(max_length=150, blank=True, default="")
+    pack_size = models.CharField(
+    max_length=50, blank=True, default="",
+    help_text="e.g. 100g, 1kg, 250ml",
+)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -426,6 +431,22 @@ class SalesInvoice(models.Model):
             elif paid > 0:
                 self.status = self.Status.PAID if paid >= total else self.Status.PARTIAL
         self.save()
+
+class InvoiceItem(models.Model):
+    """A line on an invoice that has no sale behind it (e.g. a supplier bill)."""
+    invoice = models.ForeignKey(SalesInvoice, related_name="line_items", on_delete=models.CASCADE)
+    product = models.ForeignKey(Product, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    description = models.CharField(max_length=255)
+    category = models.CharField(max_length=100, blank=True, default="")
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, default=1)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return f"{self.quantity} x {self.description}"
 class Employee(models.Model):
     class EmploymentType(models.TextChoices):
         FULL_TIME = "full_time", "Full-Time"
@@ -575,26 +596,29 @@ class Employee(models.Model):
             self.employee_number = f"EMP-{next_id:05d}"
         super().save(*args, **kwargs)
 
-
-
 class ComplianceRecord(models.Model):
     class DocumentType(models.TextChoices):
-        TAX = "tax", "Tax Compliance"
-        COUNTY = "county", "County Government"
         BUSINESS_PERMIT = "business_permit", "Business Permit"
-        PHARMACY_BOARD = "pharmacy_board", "Pharmacy & Poisons Board"
-        VET_BOARD = "vet_board", "Kenya Veterinary Board"
-        HEALTH = "health", "Public Health"
-        INSURANCE = "insurance", "Insurance"
+        VMD = "vmd", "VMD"
+        PCPB = "pcpb", "PCPB"
+        KEPHIS = "kephis", "KEPHIS"
         OTHER = "other", "Other"
 
+    class ApplicationStatus(models.TextChoices):
+        NEW = "new", "New"
+        RENEWAL = "renewal", "Renewal"
+
     document_type = models.CharField(max_length=20, choices=DocumentType.choices)
-    title = models.CharField(max_length=200, help_text="e.g. KRA Tax Compliance Certificate 2026")
+    application_status = models.CharField(
+        max_length=10, choices=ApplicationStatus.choices, default=ApplicationStatus.NEW
+    )
+    title = models.CharField(max_length=200, help_text="e.g. Single Business Permit 2026")
     file = models.FileField(
         upload_to=compliance_upload_path,
         validators=[FileExtensionValidator(["jpg", "jpeg", "png", "webp", "pdf"])],
     )
     expiry_date = models.DateField(null=True, blank=True)
+    next_renewal_date = models.DateField(null=True, blank=True)
     notes = models.TextField(blank=True, default="")
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, related_name="compliance_records",
@@ -608,7 +632,6 @@ class ComplianceRecord(models.Model):
 
     def __str__(self):
         return f"{self.get_document_type_display()}: {self.title}"
-
 class SalaryPayment(models.Model):
     """One payslip / salary payment for one employee for one month."""
 
@@ -872,8 +895,12 @@ class BusinessPayment(models.Model):
         SALARIES = "salaries", "Salaries"
         CUSTOMS = "customs", "Customs"
         COUNTY = "county_government", "County Government"
+
+        VMD = "vmd", "VMD Licence"
+        KEPHIS = "kephis", "KEPHIS Licence"
+        PCPB = "pcpb", "PCPB Licence"
         WATER = "water", "Water"
-        OTHER = "other", "Other Payment"
+        OTHER = "other", "Other Expenses"
 
     class Method(models.TextChoices):
         CASH = "cash", "Cash"
@@ -975,3 +1002,80 @@ class StoreMovement(models.Model):
 
     def __str__(self):
         return f"{self.product.name}: {self.quantity_change:+d} ({self.movement_type})"
+class Deposit(models.Model):
+    branch = models.ForeignKey("Branch", on_delete=models.PROTECT, related_name="deposits")
+    deposited_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="deposits_made")
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    deposit_date = models.DateField()
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-deposit_date", "-id"]
+
+class Supply(models.Model):
+    """A delivery of goods received from a supplier into the central store."""
+
+    class Status(models.TextChoices):
+        RECEIVED = "received", "Received"
+        CANCELLED = "cancelled", "Cancelled"
+
+    reference = models.CharField(max_length=32, unique=True, editable=False, blank=True)
+    supplier = models.ForeignKey(Supplier, related_name="supplies", on_delete=models.PROTECT)
+    supply_date = models.DateField(default=timezone.localdate)
+    supplier_ref = models.CharField(
+        max_length=60, blank=True, default="",
+        help_text="Supplier's delivery note / invoice number",
+    )
+    purchase_invoice = models.OneToOneField(
+        SalesInvoice, related_name="supply", null=True, blank=True, on_delete=models.SET_NULL,
+    )
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.RECEIVED)
+    notes = models.TextField(blank=True, default="")
+    received_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, related_name="supplies_received", null=True, blank=True,
+        on_delete=models.SET_NULL,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-supply_date", "-id"]
+        verbose_name_plural = "Supplies"
+
+    def __str__(self):
+        return f"{self.reference} - {self.supplier.name}"
+
+    def save(self, *args, **kwargs):
+        if not self.reference:
+            self.reference = f"SUP-{timezone.now().strftime('%y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+        super().save(*args, **kwargs)
+
+    @property
+    def total_cost(self):
+        return sum((i.line_total for i in self.items.all()), Decimal("0.00"))
+
+
+class SupplyItem(models.Model):
+    supply = models.ForeignKey(Supply, related_name="items", on_delete=models.CASCADE)
+    product = models.ForeignKey(Product, related_name="supply_items", on_delete=models.PROTECT)
+    quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0, validators=[MinValueValidator(0)])
+    tax_rate = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0, validators=[MinValueValidator(0)],
+        help_text="VAT % on this line (0 = not taxed)",
+    )
+
+    class Meta:
+        ordering = ["id"]
+        constraints = [
+            models.UniqueConstraint(fields=["supply", "product"], name="unique_product_per_supply"),
+        ]
+
+    def __str__(self):
+        return f"{self.quantity} x {self.product.name}"
+
+    @property
+    def line_total(self):
+        net = self.unit_cost * self.quantity
+        return net + net * self.tax_rate / 100

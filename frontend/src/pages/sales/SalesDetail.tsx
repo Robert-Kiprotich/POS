@@ -114,6 +114,7 @@ export default function SaleDetailOffcanvas({ saleId, onClose, onChanged }: Prop
   const items: any[]    = Array.isArray(s?.items) ? s.items : [];
   const payments: any[] = Array.isArray(s?.payments) ? s.payments : [];
   const balance = parseFloat(s?.balance_due) || 0;
+  const showProfit = s?.profit !== undefined;
 
   return (
     <>
@@ -172,10 +173,10 @@ export default function SaleDetailOffcanvas({ saleId, onClose, onChanged }: Prop
                   { label: "Total",   value: money(s.total_amount), cls: "" },
                   { label: "Paid",    value: money(s.amount_paid),  cls: "text-success" },
                   { label: "Balance", value: money(balance),        cls: balance > 0 ? "text-danger" : "text-success" },
-                    { label: "Profit",  value: money(s.profit),       cls: parseFloat(s.profit) < 0 ? "text-danger" : "text-success" },
+                    ...(showProfit ? [{ label: "Profit", value: money(s.profit), cls: parseFloat(s.profit) < 0 ? "text-danger" : "text-success" }] : []),
 
                 ].map(t => (
-                                    <div key={t.label} className="col-3">
+  <div key={t.label} className={showProfit ? "col-3" : "col-4"}>
                     <div className="border rounded p-2">
                       <p className="text-muted fs-12 mb-1">{t.label}</p>
                       <h6 className={`mb-0 fw-semibold ${t.cls}`}>{t.value}</h6>
@@ -235,7 +236,7 @@ export default function SaleDetailOffcanvas({ saleId, onClose, onChanged }: Prop
                           <th>Unit Price</th>
                           <th>Tax</th>
                           <th>Discount</th>
-                           <th>Profit</th>
+                          {showProfit && <th>Profit</th>}
                           <th className="text-end pe-3">Line Total</th>
                         </tr>
                       </thead>
@@ -252,7 +253,7 @@ export default function SaleDetailOffcanvas({ saleId, onClose, onChanged }: Prop
                             <td className="text-muted">{parseFloat(it.discount_amount) > 0 ? money(it.discount_amount) : "—"}</td>
                             <td className="text-end pe-3 fw-semibold">{money(it.line_total)}</td>
                             
-                            <td className="text-muted">{money(it.profit)}</td>
+                            {showProfit && <td className="text-muted">{money(it.profit)}</td>}
                           </tr>
                         ))}
                       </tbody>
@@ -287,13 +288,17 @@ export default function SaleDetailOffcanvas({ saleId, onClose, onChanged }: Prop
                     <span className="text-muted">Balance due</span>
                     <span className={balance > 0 ? "text-danger fw-semibold" : "text-success fw-semibold"}>{money(balance)}</span>
                   </div>
-                  <hr className="my-2" />
-<div className="d-flex justify-content-between fs-13">
-  <span className="text-muted">Profit</span>
-  <span className={parseFloat(s.profit) < 0 ? "text-danger fw-semibold" : "text-success fw-semibold"}>
-    {money(s.profit)}
-  </span>
-</div>
+     {showProfit && (
+  <>
+    <hr className="my-2" />
+    <div className="d-flex justify-content-between fs-13">
+      <span className="text-muted">Profit</span>
+      <span className={parseFloat(s.profit) < 0 ? "text-danger fw-semibold" : "text-success fw-semibold"}>
+        {money(s.profit)}
+      </span>
+    </div>
+  </>
+)}
                 </div>
               </div>
 

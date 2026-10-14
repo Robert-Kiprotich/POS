@@ -12,12 +12,14 @@ type SaleItem = {
   uid: string;
   product_id: number | "";
   product_name: string;
+    pack_size?: string;     // ← add
+
   item_number: string;
   retail_price: number;
   wholesale_price: number;
   unit_price: number; // derived from retail_price/wholesale_price based on the first payment's Sale Type, unless manually edited
   tax_rate: number;
-  quantity: number;
+  quantity: number | "";
   available_stock: number;
 };
 
@@ -39,6 +41,7 @@ type SaleReceipt = {
   grand_total: number;
   created_at: string; // ISO timestamp
   receipt_text: string;
+  status?: string; // "Pending" or "Completed"
 };
 
 function uid() {
@@ -108,6 +111,7 @@ function buildReceiptText(opts: {
   grandTotal: number;
   amountPaid: number;
   balance: number;
+  pending?: boolean;
 }): string {
   const width = 42; // characters — fits a standard 80mm thermal roll
   const line = "-".repeat(width);
@@ -121,7 +125,7 @@ function buildReceiptText(opts: {
   };
 
   const itemLines = opts.items.map(i => {
-    const total = i.unit_price * i.quantity * (1 + i.tax_rate / 100);
+        const total = i.unit_price * (Number(i.quantity) || 0) * (1 + i.tax_rate / 100);
     const name = i.product_name.length > width ? i.product_name.slice(0, width) : i.product_name;
     const detail = cols(`  ${i.quantity} x ${money(i.unit_price)}`, money(total));
     return `${name}\n${detail}`;
@@ -134,14 +138,14 @@ function buildReceiptText(opts: {
 
   const now = new Date();
   return [
-    center("SUPER KIMIA AGRO SOLUTIONS"),          // TODO: replace with real shop details
-    center("202202, Mpeketoni"),
-    center("Tel:  0722285664"),
+    center("SUPER  AGRO SOLUTIONS"),          // TODO: replace with real shop details
+    center("P.o Box 173, Mpeketoni"),
+    center("Tel:  0700496690"),
     line,
     cols("Receipt#:", opts.orderNumber),
     cols("Date:", now.toLocaleDateString()),
     cols("Time:", now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })),
-    cols("Cashier:", opts.cashierName || "-"),
+   
     cols("Customer:", opts.customerName),
     cols("Sale Type:", opts.saleType),
     line,
@@ -151,11 +155,13 @@ function buildReceiptText(opts: {
     cols("Tax:", money(opts.taxTotal)),
     cols("Discount:", `-${money(opts.discount)}`),
     line,
-    cols("TOTAL:", money(opts.grandTotal)),
+   cols("TOTAL:", money(opts.grandTotal)),
     line,
+    ...(opts.pending ? [center("** PAYMENT PENDING **")] : []),
     paymentLines || cols("Payment:", money(opts.amountPaid)),
     cols("Balance:", money(Math.abs(opts.balance)) + (opts.balance < 0 ? " (change)" : "")),
     line,
+    cols("You Were Served By:", opts.cashierName || "-"),
     center("Thank you for shopping!"),
     center("Goods sold in good condition"),
     center("are non-refundable."),
@@ -230,8 +236,7 @@ export default function POS() {
     const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   // Receipt of the most recently completed sale, used by the Print button
-  const [lastReceipt, setLastReceipt] = useState<{ text: string; orderNumber: string } | null>(null);
-  // Receipt history — now stored server-side (GET/POST via /sales/) instead
+const [lastReceipt, setLastReceipt] = useState<{ text: string; orderNumber: string; saleType: string } | null>(null);  // Receipt history — now stored server-side (GET/POST via /sales/) instead
   // of localStorage, so it's shared across tills/devices.
     const [receipts, setReceipts] = useState<SaleReceipt[]>(() => readSavedReceipts());
   const [loadingReceipts, setLoadingReceipts] = useState(true);
@@ -274,6 +279,7 @@ export default function POS() {
   // Pricing mode for the whole cart is driven by the first payment's Sale
   // Type (mirrors how the receipt's cashier name is taken from payments[0]).
   const saleType = payments[0]?.sale_type ?? "Retail";
+  const customerRequired = saleType === "Wholesale" || saleType === "Credit";
 
   const loadLookups = useCallback(async (silent = false) => {
     if (!silent) setLoadingLookups(true);
@@ -347,15 +353,15 @@ unit_price: saleType === "Wholesale" ? i.wholesale_price : i.retail_price,
     ).slice(0, 8);
   }, [customerSearch, customers]);
 
-  const filteredProducts = useMemo(() => {
-    if (!productSearch.trim()) return [];
-    const q = productSearch.toLowerCase();
-    return products.filter(p =>
-      (p.name || "").toLowerCase().includes(q) ||
-      (p.item_number || "").toLowerCase().includes(q)
-    ).slice(0, 8);
-  }, [productSearch, products]);
-
+ const filteredProducts = useMemo(() => {
+  if (!productSearch.trim()) return [];
+  const q = productSearch.toLowerCase();
+  return products.filter(p =>
+    (p.name         || "").toLowerCase().includes(q) ||
+    (p.item_number  || "").toLowerCase().includes(q) ||
+    (p.manufacturer || "").toLowerCase().includes(q)
+  ).slice(0, 8);
+}, [productSearch, products]);
   function pricesFor(product: any) {
     const bs = branchStock[product.id];
     const retail = parseFloat(bs?.effective_retail_price ?? product.retail_price) || 0;
@@ -390,7 +396,7 @@ unit_price: saleType === "Wholesale" ? i.wholesale_price : i.retail_price,
       if (existing) {
         return prev.map(i =>
           i.product_id === product.id
-            ? { ...i, quantity: available ? Math.min(i.quantity + qty, available) : i.quantity + qty }
+                      ? { ...i, quantity: available ? Math.min((Number(i.quantity) || 0) + qty, available) : (Number(i.quantity) || 0) + qty }
             : i
         );
       }
@@ -398,6 +404,7 @@ unit_price: saleType === "Wholesale" ? i.wholesale_price : i.retail_price,
         uid: uid(),
         product_id: product.id,
         product_name: product.name,
+        pack_size: product.pack_size || "",
         item_number: product.item_number || "",
         retail_price: retailPrice,
         wholesale_price: wholesalePrice,
@@ -446,8 +453,9 @@ unit_price: saleType === "Wholesale" ? i.wholesale_price : i.retail_price,
     setPayments(prev => prev.filter(p => p.uid !== uidVal));
   }
 
-  const subtotal = items.reduce((s, i) => s + i.unit_price * i.quantity, 0);
-  const taxTotal = items.reduce((s, i) => s + i.unit_price * i.quantity * (i.tax_rate / 100), 0);
+   const qtyOf = (i: SaleItem) => Number(i.quantity) || 0;
+  const subtotal = items.reduce((s, i) => s + i.unit_price * qtyOf(i), 0);
+  const taxTotal = items.reduce((s, i) => s + i.unit_price * qtyOf(i) * (i.tax_rate / 100), 0);
   const discount = parseFloat(discountAmount) || 0;
   const grandTotal = Math.max(subtotal + taxTotal - discount, 0);
   const amountPaid = payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
@@ -480,23 +488,27 @@ unit_price: saleType === "Wholesale" ? i.wholesale_price : i.retail_price,
       showWarning("Select a branch for this sale before checking out.", "No Branch Selected");
       return;
     }
-    if (!items.length) {
-      showWarning("Add at least one item to the sale.", "Cart is Empty");
+   const badQty = items.find(i => !Number(i.quantity) || Number(i.quantity) < 1);
+    if (badQty) {
+      showWarning(`Enter a quantity for "${badQty.product_name}".`, "Quantity Required");
       return;
     }
-   const isCredit = saleType === "Credit";
-if (isCredit && !customerId) {
-  showWarning("Select a customer for a credit sale.", "Customer Required");
+const isCredit = saleType === "Credit";
+const isWholesale = saleType === "Wholesale";
+// Wholesale can be paid later, so an unpaid or part-paid sale is "Pending"
+const isPending = isWholesale && amountPaid < grandTotal - 0.005;
+
+if ((isCredit || isWholesale) && !customerId) {
+  showWarning(`Select a customer for a ${saleType.toLowerCase()} sale.`, "Customer Required");
   return;
 }
-if (!isCredit && amountPaid <= 0) {
-  showWarning("Record at least one payment before completing the sale.", "No Payment Recorded");
+if (!isCredit && !isWholesale && amountPaid < grandTotal - 0.005) {
+  showWarning(
+    `Retail sales must be paid in full. Balance remaining: ${money(grandTotal - amountPaid)}.`,
+    "Full Payment Required"
+  );
   return;
 }
-    if (payments.some(p => parseFloat(p.amount) > 0 && !p.received_by)) {
-      showWarning("Select who received each payment.", "Received By Required");
-      return;
-    }
 
     const cashier = salesClerks.find(u => String(u.id) === String(payments[0]?.received_by));
     const cashierName = cashier ? `${cashier.firstname || ""} ${cashier.lastname || ""}`.trim() || cashier.username : "";
@@ -517,14 +529,16 @@ if (!isCredit && amountPaid <= 0) {
       grandTotal,
       amountPaid,
       balance,
+       pending: isPending,
     });
 
     const payload = {
       branch: branchId,
        sale_type: saleType,
+       status: isPending ? "Pending" : "Completed",
       customer: customerId || null,
       discount_amount: discount,
-      items: items.map(i => ({ product: i.product_id, quantity: i.quantity, unit_price: i.unit_price })),
+            items: items.map(i => ({ product: i.product_id, quantity: Number(i.quantity), unit_price: i.unit_price })),
       payments: payments
         .filter(p => parseFloat(p.amount) > 0)
         .map(p => ({
@@ -568,15 +582,16 @@ if (!isCredit && amountPaid <= 0) {
         receipt_text: receiptText,
       }, ...prev]);
 
-setLastReceipt(isCredit ? null : { text: receiptText, orderNumber });
-     await showSuccess(
+setLastReceipt(isCredit ? null : { text: receiptText, orderNumber, saleType });
+await showSuccess(
   isCredit
     ? (orderNumber !== "-" ? `Credit sale ${orderNumber} recorded.` : "Credit sale recorded.")
-    : (orderNumber !== "-" ? `Sale ${orderNumber} completed successfully.` : "Sale completed successfully."),
-  isCredit ? "Credit Sale Recorded" : "Sale Complete",
+    : isPending
+      ? `Wholesale sale ${orderNumber} recorded. Payment pending.`
+      : (orderNumber !== "-" ? `Sale ${orderNumber} completed successfully.` : "Sale completed successfully."),
+  isCredit ? "Credit Sale Recorded" : isPending ? "Sale Pending Payment" : "Sale Complete",
   1600
 );
-
       resetSaleForm();
     } catch (err: any) {
       const data = err.response?.data;
@@ -596,7 +611,22 @@ setLastReceipt(isCredit ? null : { text: receiptText, orderNumber });
   }
 
   return (
+    
     <div className="page-wrapper">
+      <style>{`
+  .pos-items-table .pos-num-input {
+    text-align: center;
+    font-weight: 600;
+  }
+  @media (max-width: 767px) {
+    .pos-items-table .pos-num-input {
+      height: 42px;
+      font-size: 16px;      /* 16px also stops iOS from zooming in on focus */
+      padding: 4px 6px;
+    }
+    .pos-items-table td, .pos-items-table th { vertical-align: middle; }
+  }
+`}</style>
       <div className="content">
         <div className="d-flex flex-column" style={{ height: "calc(100vh - 130px)", minHeight: 520 }}>
 
@@ -608,13 +638,13 @@ setLastReceipt(isCredit ? null : { text: receiptText, orderNumber });
               <div className="position-relative flex-grow-1" style={{ maxWidth: 380 }}>
                 <div className="d-flex align-items-center gap-2">
                   <input
-                    type="text"
-                    className="form-control form-control-sm fs-13 fw-medium"
-                    placeholder="Billing to: Walk-in Customer"
-                    value={selectedCustomer ? selectedCustomer.name : customerSearch}
-                    onChange={e => { setCustomerSearch(e.target.value); setCustomerId(""); setShowCustomerDropdown(true); }}
-                    onFocus={() => setShowCustomerDropdown(true)}
-                  />
+  type="text"
+  className={`form-control form-control-sm fs-13 fw-medium ${customerRequired && !selectedCustomer ? "border-danger" : ""}`}
+  placeholder={customerRequired ? "Billing to: select customer (required)" : "Billing to: Walk-in Customer"}
+  value={selectedCustomer ? selectedCustomer.name : customerSearch}
+  onChange={e => { setCustomerSearch(e.target.value); setCustomerId(""); setShowCustomerDropdown(true); }}
+  onFocus={() => setShowCustomerDropdown(true)}
+/>
                   {selectedCustomer && (
                     <button className="btn btn-sm btn-link text-muted px-1"
                       onClick={() => { setCustomerId(""); setCustomerSearch(""); }} title="Reset to Walk-in">
@@ -624,11 +654,13 @@ setLastReceipt(isCredit ? null : { text: receiptText, orderNumber });
                 </div>
                 {showCustomerDropdown && !selectedCustomer && (
                   <div className="card shadow-lg border position-absolute w-100 mt-1" style={{ zIndex: 1040, maxHeight: 220, overflowY: "auto" }}>
-                    <button type="button" className="btn btn-link text-start w-100 fs-13 py-2 px-3 text-decoration-none text-dark border-bottom"
-                      onClick={() => { setCustomerId(""); setCustomerSearch(""); setShowCustomerDropdown(false); }}>
-                      <div className="fw-medium">Walk-in Customer</div>
-                      <div className="text-muted fs-11">No account · default</div>
-                    </button>
+                  {!customerRequired && (
+  <button type="button" className="btn btn-link text-start w-100 fs-13 py-2 px-3 text-decoration-none text-dark border-bottom"
+    onClick={() => { setCustomerId(""); setCustomerSearch(""); setShowCustomerDropdown(false); }}>
+    <div className="fw-medium">Walk-in Customer</div>
+    <div className="text-muted fs-11">No account · default</div>
+  </button>
+)}
                     {loadingLookups ? (
                       <div className="p-2 text-muted fs-12">Loading…</div>
                     ) : filteredCustomers.length === 0 ? (
@@ -725,9 +757,14 @@ setLastReceipt(isCredit ? null : { text: receiptText, orderNumber });
                           >
                             <div className="flex-grow-1">
                               <div className="fw-medium">{p.name}</div>
-                              <div className="text-muted fs-11">
-                                {p.item_number} · Stock: {p.stock_quantity ?? p.total_stock} · {money(priceFor(p))} ({saleType})
-                              </div>
+                              <div className="fw-medium">
+  {p.name}
+  {p.pack_size && <span className="text-muted fw-normal"> · {p.pack_size}</span>}
+</div>
+<div className="text-muted fs-11">
+  {p.manufacturer && <>{p.manufacturer} · </>}
+  {p.item_number} · Stock: {stockFor(p.id)} · {money(priceFor(p))} ({saleType})
+</div>
                             </div>
                             <input
                               type="number" min={1} className="form-control form-control-sm"
@@ -752,46 +789,73 @@ setLastReceipt(isCredit ? null : { text: receiptText, orderNumber });
                       <i className="ti ti-shopping-cart-off fs-2 d-block mb-2" />No items added yet — search above and click a product to add it
                     </div>
                   ) : (
-                    <div className="table-responsive flex-grow-1" style={{ minHeight: 0, overflowY: "auto" }}>
-                      <table className="table table-sm mb-0 fs-13">
-                        <thead>
-                          <tr>
-                            {["Product", "Qty", "Unit Price", "Tax", "Line Total", ""].map((h, i) => (
-                              <th key={i}
-                                className={h === "Line Total" ? "text-end" : ""}
-                                style={{
-                                  position: "sticky", top: 0, zIndex: 1, background: "#f8f9fa",
-                                  width: [undefined, 80, 110, 60, 110, 36][i],
-                                }}>
-                                {h}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {items.map(i => (
-                            <tr key={i.uid}>
-                              <td className="fw-medium">{i.product_name}</td>
-                              <td>
-                                <input type="number" min={1} className="form-control form-control-sm"
-                                  value={i.quantity} onChange={e => updateItem(i.uid, { quantity: Math.max(1, Number(e.target.value)) })} />
-                              </td>
-                              <td>
-                                <input type="number" step="0.01" min={0} className="form-control form-control-sm"
-                                  value={i.unit_price} onChange={e => updateItem(i.uid, { unit_price: Math.max(0, Number(e.target.value)) })} />
-                              </td>
-                              <td className="text-muted">{i.tax_rate}%</td>
-                              <td className="text-end fw-semibold">{money(i.unit_price * i.quantity * (1 + i.tax_rate / 100))}</td>
-                              <td>
-                                <button className="btn btn-sm btn-link text-danger px-1" onClick={() => removeItem(i.uid)}>
-                                  <i className="ti ti-trash" />
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                 <div className="table-responsive flex-grow-1" style={{ minHeight: 0, overflow: "auto" }}>
+  <table className="table table-sm mb-0 fs-13 pos-items-table" style={{ minWidth: 560 }}>
+    <thead>
+      <tr>
+        {["Product", "Qty", "Unit Price", "Tax", "Line Total", ""].map((h, i) => (
+          <th key={i}
+            className={h === "Line Total" ? "text-end" : ""}
+            style={{
+              position: "sticky", top: 0, zIndex: 1, background: "#f8f9fa",
+              minWidth: [150, 90, 120, 60, 110, 40][i],
+            }}>
+            {h}
+          </th>
+        ))}
+      </tr>
+    </thead>
+    <tbody>
+      {items.map(i => (
+        <tr key={i.uid}>
+          <td className="fw-medium">{i.product_name}
+            {i.pack_size && <span className="text-muted fw-normal"> · {i.pack_size}</span>}
+          </td>
+          
+          <td>
+                       <input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              className="form-control form-control-sm pos-num-input"
+              style={{ minWidth: 72 }}
+              value={i.quantity}
+              onFocus={e => e.target.select()}
+              onChange={e => {
+                const v = e.target.value;
+                updateItem(i.uid, { quantity: v === "" ? "" : Math.max(0, Math.floor(Number(v))) });
+              }}
+              onBlur={() => {
+                if (!Number(i.quantity) || Number(i.quantity) < 1) updateItem(i.uid, { quantity: 1 });
+              }}
+            />
+          </td>
+          <td>
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              min={0}
+              className="form-control form-control-sm pos-num-input"
+              style={{ minWidth: 100 }}
+              value={i.unit_price}
+              onFocus={e => e.target.select()}
+              onChange={e => updateItem(i.uid, { unit_price: Math.max(0, Number(e.target.value)) })}
+            />
+          </td>
+          <td className="text-muted">{i.tax_rate}%</td>
+          
+                    <td className="text-end fw-semibold">{money(i.unit_price * qtyOf(i) * (1 + i.tax_rate / 100))}</td>
+          <td>
+            <button className="btn btn-sm btn-link text-danger px-1" onClick={() => removeItem(i.uid)}>
+              <i className="ti ti-trash" />
+            </button>
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
                   )}
                 </div>
               </div>
@@ -848,7 +912,7 @@ setLastReceipt(isCredit ? null : { text: receiptText, orderNumber });
                     <div key={p.uid} className="mb-3 pb-3" style={{ borderBottom: idx < payments.length - 1 ? "1px dashed #eee" : "none" }}>
                       <div className="row g-2 mb-2">
                         <div className="col-4">
-                          <label className="form-label fs-12 mb-1">Amount</label>
+                          <label className="form-label fs-12 mb-1">Amount Received</label>
                           <input type="number" min={0} step="0.01" className="form-control form-control-sm fs-13"
                             value={p.amount} onChange={e => updatePayment(p.uid, { amount: e.target.value })} />
                         </div>
@@ -870,7 +934,7 @@ setLastReceipt(isCredit ? null : { text: receiptText, orderNumber });
 
                       <div className="row g-2 align-items-end">
                         <div className={idx === 0 ? "col-8" : "col-10"}>
-                          <label className="form-label fs-12 mb-1">Received By</label>
+                          <label className="form-label fs-12 mb-1">Cashier Name</label>
                           <select className="form-select form-select-sm fs-13" value={p.received_by}
                             onChange={e => updatePayment(p.uid, { received_by: e.target.value })}>
                             <option value="">Select sales clerk…</option>
@@ -897,12 +961,15 @@ setLastReceipt(isCredit ? null : { text: receiptText, orderNumber });
                         )}
                       </div>
 
-                      {idx === 0 && (
-                        <div className="fs-11 text-muted mt-1">
-{p.sale_type === "Credit"
-  ? "Credit sale: items use retail prices. Leave Amount empty to put the full total on credit, or enter a deposit."
-  : `Sale Type prices every item from the product's ${p.sale_type.toLowerCase()} price.`}                        </div>
-                      )}
+                    {idx === 0 && (
+  <div className="fs-11 text-muted mt-1">
+    {p.sale_type === "Credit"
+      ? "Credit sale: items use retail prices. Leave Amount empty to put the full total on credit, or enter a deposit."
+      : p.sale_type === "Wholesale"
+        ? "Wholesale: leave Amount empty (or enter less than the total) to record the sale as Pending and pay later."
+        : `Sale Type prices every item from the product's ${p.sale_type.toLowerCase()} price.`}
+  </div>
+)}
                     </div>
                   ))}
                 </div>
@@ -912,8 +979,12 @@ setLastReceipt(isCredit ? null : { text: receiptText, orderNumber });
   disabled={submitting || !items.length}
   onClick={handleSubmit}
 >
-  {submitting ? <span className="spinner-border spinner-border-sm me-2" /> : <i className="ti ti-check me-1" />}
-  {saleType === "Credit" ? "Complete Credit Sale" : "Complete Sale"}
+ {submitting ? <span className="spinner-border spinner-border-sm me-2" /> : <i className="ti ti-check me-1" />}
+{saleType === "Credit"
+  ? "Complete Credit Sale"
+  : saleType === "Wholesale" && amountPaid < grandTotal - 0.005
+    ? "Complete (Pay Later)"
+    : "Complete Sale"}
 </button>
                   <button
                     className="btn btn-outline-danger flex-fill"
@@ -1030,6 +1101,7 @@ setLastReceipt(isCredit ? null : { text: receiptText, orderNumber });
                           : new Date(r.created_at).toLocaleString()}
                       </div>
                       <div className="text-muted fs-11">{r.customer_name} · {r.sale_type}</div>
+                      {r.status === "Pending" && <span className="badge bg-warning-transparent text-warning fs-10">Pending</span>}
                     </div>
                     <div className="text-end flex-shrink-0">
                       <div className="fw-semibold">{money(Number(r.grand_total) || 0)}</div>

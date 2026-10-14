@@ -5,6 +5,7 @@ from .utils import get_head_office_branch
 import datetime
 import pytz
 from decimal import *
+from datetime import timedelta as _td
 
 from .models import *
 
@@ -37,7 +38,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "id", "name", "item_number", "category", "category_name",
             "description", "cost_price", "retail_price", "wholesale_price",
             "tax_rate", "expiry_date",
-            "image", "image_url", "is_active", "total_stock",
+            "image", "image_url", "manufacturer", "pack_size", "is_active", "total_stock",
             "initial_quantity", "reorder_level",
             "created_at", "updated_at",
         ]
@@ -269,7 +270,19 @@ class SaleSerializer(serializers.ModelSerializer):
         revenue = sum((i.unit_price * i.quantity for i in obj.items.all()), Decimal("0.00"))
         cost = sum((i.product.cost_price * i.quantity for i in obj.items.all()), Decimal("0.00"))
         return revenue - cost - (obj.discount_amount or Decimal("0.00"))
-
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        if not (request and _is_admin_user(request.user)):
+            data.pop("profit", None)      # non-admins never receive profit
+        return data
+def _is_admin_user(user):
+    if getattr(user, "is_admin", False):
+        return True
+    try:
+        return "admin" in (user.role.role_name or "").lower()
+    except Exception:
+        return False
 class SaleCreateSerializer(serializers.ModelSerializer):
     """
     Write serializer for checkout: accepts a nested list of items, creates the
@@ -287,6 +300,10 @@ class SaleCreateSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         if not attrs.get("branch"):
             raise serializers.ValidationError({"branch": "Branch is required for checkout."})
+        if attrs.get("sale_type") in ("Wholesale", "Credit") and not attrs.get("customer"):
+            raise serializers.ValidationError(
+                {"customer": "A customer is required for wholesale and credit sales."}
+            )
         return attrs
 
     def validate_items(self, items):
@@ -297,7 +314,7 @@ class SaleCreateSerializer(serializers.ModelSerializer):
         if value not in ("Retail", "Wholesale", "Credit"):
             raise serializers.ValidationError("sale_type must be Retail, Wholesale or Credit.")
         return value
-
+    
     @transaction.atomic
     def create(self, validated_data):
         items_data = validated_data.pop("items")
@@ -526,6 +543,10 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
     due_date = serializers.DateField(required=False, allow_null=True)
     supplier_name = serializers.CharField(source="supplier.name", read_only=True, default=None)
     payment_status = serializers.CharField(read_only=True)
+    supply = serializers.PrimaryKeyRelatedField(
+        queryset=Supply.objects.all(), write_only=True, required=False, allow_null=True)
+    previous_balance = serializers.SerializerMethodField()   # <- add
+    items = serializers.ListField(child=serializers.DictField(), write_only=True, required=False)
 
     class Meta:
         model = SalesInvoice
@@ -565,6 +586,9 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
             "supplier", 
             "supplier_name", 
             "payment_status",
+            "items",
+            "previous_balance",
+            "supply",
             # Timestamps
             "created_at",
             "updated_at",
@@ -586,7 +610,20 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
             if mutable.get(key) == "":
                 mutable[key] = None
         return super().to_internal_value(mutable)
-
+    def get_previous_balance(self, obj):
+        """Unpaid balance on this supplier's EARLIER purchase bills (excludes this one)."""
+        if obj.invoice_type != "purchase" or not obj.supplier_id:
+            return Decimal("0.00")
+        from django.db.models import Q
+        earlier = (
+            SalesInvoice.objects
+            .filter(supplier_id=obj.supplier_id, invoice_type="purchase", balance_due__gt=0)
+            .exclude(status="cancelled")
+            .exclude(pk=obj.pk)
+            .filter(Q(issue_date__lt=obj.issue_date) |
+                    Q(issue_date=obj.issue_date, id__lt=obj.id))
+        )
+        return earlier.aggregate(t=Coalesce(Sum("balance_due"), Decimal("0.00")))["t"]
     def validate_issue_date(self, value):
         if value is None:
             raise serializers.ValidationError("Issue date is required.")
@@ -599,14 +636,86 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"due_date": "Due date cannot be earlier than the issue date."}
             )
+        inv_type = attrs.get("invoice_type") or getattr(self.instance, "invoice_type", None)
+        supplier = attrs["supplier"] if "supplier" in attrs else getattr(self.instance, "supplier", None)
+        supply = attrs.get("supply")
+
+        if supply:
+            if inv_type != SalesInvoice.InvoiceType.PURCHASE:
+                raise serializers.ValidationError({"supply": "Only purchase invoices can be linked to a supply."})
+            if supply.status != Supply.Status.RECEIVED:
+                raise serializers.ValidationError({"supply": "This supply is cancelled."})
+            if supplier and supply.supplier_id != supplier.id:
+                raise serializers.ValidationError({"supply": "This supply belongs to a different supplier."})
+            bill = supply.purchase_invoice
+            if bill and bill.status != SalesInvoice.Status.CANCELLED:
+                raise serializers.ValidationError({"supply": f"This supply is already invoiced ({bill.invoice_number})."})
+            if not supplier:
+                attrs["supplier"] = supplier = supply.supplier
+
+        if inv_type == SalesInvoice.InvoiceType.PURCHASE and not supplier:
+            raise serializers.ValidationError({"supplier": "Select the supplier for a purchase invoice."})
         return attrs
 
+    @staticmethod
+    def _clean_items(items):
+        out = []
+        for n, row in enumerate(items or [], 1):
+            desc = str(row.get("description") or "").strip()
+            if not desc:
+                continue
+            try:
+                qty = Decimal(str(row.get("quantity") or 0))
+                price = Decimal(str(row.get("unit_price") or 0))
+                rate = Decimal(str(row.get("tax_rate") or 0))
+            except InvalidOperation:
+                raise serializers.ValidationError({"items": f"Line {n}: quantity, price and tax must be numbers."})
+            if qty <= 0 or price < 0 or rate < 0:
+                raise serializers.ValidationError(
+                    {"items": f"Line {n}: quantity must be above zero and price/tax cannot be negative."})
+            pid = row.get("product") or None
+            if pid and not Product.objects.filter(pk=pid).exists():
+                pid = None
+            out.append({"product_id": pid, "description": desc[:255],
+                        "category": str(row.get("category") or "")[:100],
+                        "quantity": qty, "unit_price": price, "tax_rate": rate})
+        return out
+
+    @staticmethod
+    def _totals(items):
+        cent = Decimal("0.01")
+        sub = sum((i["quantity"] * i["unit_price"] for i in items), Decimal("0"))
+        tax = sum((i["quantity"] * i["unit_price"] * i["tax_rate"] / 100 for i in items), Decimal("0"))
+        return sub.quantize(cent), tax.quantize(cent)
+
+    def _items_out(self, inv):
+        if inv.sale_id:
+            return [{
+                "id": i.id, "description": i.product.name,
+                "category": i.product.category.name if i.product.category else "",
+                "quantity": i.quantity, "unit_price": i.unit_price, "tax_rate": i.tax_rate,
+                "tax_amount": round(i.line_tax, 2), "line_total": round(i.line_total, 2),
+            } for i in inv.sale.items.all()]
+        rows = []
+        for i in inv.line_items.all():
+            net = i.quantity * i.unit_price
+            tax = net * i.tax_rate / 100
+            rows.append({
+                "id": i.id, "product": i.product_id, "description": i.description, "category": i.category,
+                "quantity": i.quantity, "unit_price": i.unit_price, "tax_rate": i.tax_rate,
+                "tax_amount": round(tax, 2), "line_total": round(net + tax, 2),
+            })
+        return rows
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["items"] = self._items_out(instance)
+        return data
+
+    @transaction.atomic
     def create(self, validated_data):
-        """
-        With a sale: snapshot money + billed-to info from it.
-        Without a sale: use the amounts entered on the form; the model's
-        save() calculates total_amount and balance_due.
-        """
+        items = validated_data.pop("items", None)
+        supply = validated_data.pop("supply", None)
         sale = validated_data.get("sale")
 
         if sale:
@@ -616,16 +725,38 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
                 validated_data.setdefault("billed_to_phone", customer.phone or "")
                 validated_data.setdefault("billed_to_email", customer.email or "")
                 validated_data.setdefault("billed_to_address", customer.address or "")
-
             validated_data["subtotal"] = sale.subtotal
             validated_data["discount_amount"] = sale.discount_amount
             validated_data["tax_amount"] = sale.tax_amount
             validated_data["total_amount"] = sale.total_amount
             validated_data["amount_paid"] = sale.amount_paid
             validated_data["balance_due"] = sale.balance_due
+            return super().create(validated_data)
 
-        return super().create(validated_data)
+        clean = self._clean_items(items)
+        if clean:
+            validated_data["subtotal"], validated_data["tax_amount"] = self._totals(clean)
+        inv = super().create(validated_data)
+        InvoiceItem.objects.bulk_create([InvoiceItem(invoice=inv, **i) for i in clean])
+        if supply:                                        # <- add
+            supply.purchase_invoice = inv
+            supply.save(update_fields=["purchase_invoice", "updated_at"])
+        return inv
+       
 
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        items = validated_data.pop("items", None)
+        clean = None
+        if items is not None and not instance.sale_id:
+            clean = self._clean_items(items)
+            if clean:
+                validated_data["subtotal"], validated_data["tax_amount"] = self._totals(clean)
+        inv = super().update(instance, validated_data)
+        if clean is not None:
+            inv.line_items.all().delete()
+            InvoiceItem.objects.bulk_create([InvoiceItem(invoice=inv, **i) for i in clean])
+        return inv
 class EmployeeSerializer(serializers.ModelSerializer):
     # --- Read-only conveniences ---
     full_name = serializers.CharField(read_only=True)
@@ -765,9 +896,9 @@ class EmployeeSerializer(serializers.ModelSerializer):
             )
 
         return attrs
-
 class ComplianceRecordSerializer(serializers.ModelSerializer):
     document_type_display = serializers.CharField(source="get_document_type_display", read_only=True)
+    application_status_display = serializers.CharField(source="get_application_status_display", read_only=True)
     file_url = serializers.SerializerMethodField()
     uploaded_by_name = serializers.SerializerMethodField()
 
@@ -776,8 +907,9 @@ class ComplianceRecordSerializer(serializers.ModelSerializer):
     class Meta:
         model = ComplianceRecord
         fields = [
-            "id", "document_type", "document_type_display", "title",
-            "file", "file_url", "expiry_date", "notes",
+            "id", "document_type", "document_type_display",
+            "application_status", "application_status_display",
+            "title", "file", "file_url", "expiry_date", "next_renewal_date", "notes",
             "uploaded_by", "uploaded_by_name", "created_at", "updated_at",
         ]
         read_only_fields = ["uploaded_by", "created_at", "updated_at"]
@@ -804,7 +936,6 @@ class ComplianceRecordSerializer(serializers.ModelSerializer):
         if not value or not value.strip():
             raise serializers.ValidationError("Title is required.")
         return value.strip()
-
 class SalaryPaymentSerializer(serializers.ModelSerializer):
     employee_name = serializers.CharField(source="employee.full_name", read_only=True)
     employee_number = serializers.CharField(source="employee.employee_number", read_only=True)
@@ -1261,4 +1392,313 @@ class StoreMovementSerializer(serializers.ModelSerializer):
             return "System"
         return f"{u.firstname} {u.lastname}".strip() or u.username
 
+class DepositSerializer(serializers.ModelSerializer):
+    branch_name = serializers.CharField(source="branch.name", read_only=True)
+    deposited_by_name = serializers.SerializerMethodField()
 
+    class Meta:
+        model = Deposit
+        fields = ["id", "branch", "branch_name", "deposited_by", "deposited_by_name",
+                  "amount", "deposit_date", "created_at"]
+
+    def get_deposited_by_name(self, obj):
+        u = obj.deposited_by
+        return f"{u.firstname} {u.lastname}".strip() or u.username
+
+    def validate_amount(self, v):
+        if v <= 0:
+            raise serializers.ValidationError("Amount must be greater than zero.")
+        return v
+TERMS_DAYS = {"cash": 0, "net_7": 7, "net_14": 14, "net_30": 30, "net_60": 60}
+
+
+def build_supply_bill(supply, tax_rate=Decimal("0"), due_date=None):
+    """Create a purchase invoice for a supply, with one line per supply item.
+    VAT is taken from each line's own tax_rate (0 = not taxed)."""
+    supplier = supply.supplier
+    items = list(supply.items.select_related("product", "product__category"))
+    cent = Decimal("0.01")
+    subtotal = sum((i.unit_cost * i.quantity for i in items), Decimal("0"))
+    tax = sum((i.unit_cost * i.quantity * i.tax_rate / 100 for i in items), Decimal("0"))
+    if due_date is None:
+        days = TERMS_DAYS.get(supplier.payment_terms, 0)
+        due_date = supply.supply_date + _td(days=days) if days else None
+
+    bill = SalesInvoice.objects.create(
+        invoice_type=SalesInvoice.InvoiceType.PURCHASE,
+        supplier=supplier,
+        status=SalesInvoice.Status.ISSUED,
+        issue_date=supply.supply_date,
+        due_date=due_date,
+        billed_to_name=supplier.name, billed_to_phone=supplier.phone,
+        billed_to_email=supplier.email, billed_to_address=supplier.address,
+        subtotal=subtotal.quantize(cent), tax_amount=tax.quantize(cent),
+        notes=f"Supply {supply.reference}",
+        extra_data={"supplier_ref": supply.supplier_ref, "supply": supply.reference},
+    )
+    InvoiceItem.objects.bulk_create([
+        InvoiceItem(
+            invoice=bill, product=i.product, description=i.product.name,
+            category=i.product.category.name if i.product.category else "",
+            quantity=i.quantity, unit_price=i.unit_cost, tax_rate=i.tax_rate,
+        ) for i in items
+    ])
+    supply.purchase_invoice = bill
+    supply.save(update_fields=["purchase_invoice", "updated_at"])
+    return bill
+
+def sync_supply_bill(supply):
+    """After an edit, refresh the supply's invoice (supplier, dates, lines, totals)."""
+    bill = supply.purchase_invoice
+    if not bill or bill.status == SalesInvoice.Status.CANCELLED:
+        return
+    items = list(supply.items.select_related("product", "product__category"))
+    cent = Decimal("0.01")
+    subtotal = sum((i.unit_cost * i.quantity for i in items), Decimal("0"))
+    tax = sum((i.unit_cost * i.quantity * i.tax_rate / 100 for i in items), Decimal("0"))
+    supplier = supply.supplier
+    days = TERMS_DAYS.get(supplier.payment_terms, 0)
+
+    bill.supplier = supplier
+    bill.issue_date = supply.supply_date
+    bill.due_date = supply.supply_date + _td(days=days) if days else None
+    bill.billed_to_name, bill.billed_to_phone = supplier.name, supplier.phone
+    bill.billed_to_email, bill.billed_to_address = supplier.email, supplier.address
+    bill.subtotal = subtotal.quantize(cent)
+    bill.tax_amount = tax.quantize(cent)
+    bill.extra_data = {**(bill.extra_data or {}), "supplier_ref": supply.supplier_ref}
+    bill.save()
+    bill.line_items.all().delete()
+    InvoiceItem.objects.bulk_create([
+        InvoiceItem(
+            invoice=bill, product=i.product, description=i.product.name,
+            category=i.product.category.name if i.product.category else "",
+            quantity=i.quantity, unit_price=i.unit_cost, tax_rate=i.tax_rate,
+        ) for i in items
+    ])
+# ---------- serializers ----------
+class SupplyItemSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    item_number = serializers.CharField(source="product.item_number", read_only=True)
+    line_total = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = SupplyItem
+        fields = ["id", "product", "product_name", "item_number", "quantity", "unit_cost", "tax_rate", "line_total"]
+
+
+class SupplyItemWriteSerializer(serializers.Serializer):
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
+    quantity = serializers.IntegerField(min_value=1)
+    unit_cost = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0, min_value=0)
+    tax_rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=0,
+                                        min_value=0, max_value=100)
+
+
+class SupplySerializer(serializers.ModelSerializer):
+    """Read serializer (list + detail)."""
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+    supplier_phone = serializers.CharField(source="supplier.phone", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    received_by_name = serializers.SerializerMethodField()
+    purchase_invoice_number = serializers.CharField(source="purchase_invoice.invoice_number", read_only=True, default=None)
+    items = SupplyItemSerializer(many=True, read_only=True)
+    total_cost = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    total_units = serializers.SerializerMethodField()
+    has_invoice = serializers.SerializerMethodField()
+    can_edit = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Supply
+        fields = [
+            "id", "reference", "supplier", "supplier_name", "supplier_phone",
+            "supply_date", "supplier_ref", "status", "status_display", "notes",
+            "purchase_invoice", "purchase_invoice_number", "has_invoice", "can_edit",
+            "items", "total_units", "total_cost",
+            "received_by", "received_by_name", "created_at", "updated_at",
+        ]
+
+    def get_received_by_name(self, obj):
+        u = obj.received_by
+        return (f"{u.firstname} {u.lastname}".strip() or u.username) if u else "—"
+
+    def get_total_units(self, obj):
+        return sum(i.quantity for i in obj.items.all())
+
+    def get_has_invoice(self, obj):
+        b = obj.purchase_invoice
+        return bool(b and b.status != SalesInvoice.Status.CANCELLED)
+
+    def get_can_edit(self, obj):
+        if obj.status != Supply.Status.RECEIVED:
+            return False
+        b = obj.purchase_invoice
+        return not (b and b.payments_made.filter(status="paid").exists())
+
+
+class SupplyWriteSerializer(serializers.ModelSerializer):
+    """
+    Used for POST (create) and PUT (edit):
+    {
+      "supplier": 3, "supply_date": "2026-10-13", "supplier_ref": "DN-4471", "notes": "",
+      "create_bill": true,        // create only: also generate the purchase invoice
+      "tax_rate": 16,             // create only, optional: VAT % put on the invoice lines
+      "update_cost_price": false, // set each product's cost_price to the unit_cost entered
+      "items": [{"product": 12, "quantity": 50, "unit_cost": 120}, ...]
+    }
+    On PUT, `items` is the complete new list of lines.
+    """
+    items = SupplyItemWriteSerializer(many=True, write_only=True)
+    create_bill = serializers.BooleanField(write_only=True, required=False, default=False)
+    tax_rate = serializers.DecimalField(max_digits=5, decimal_places=2, write_only=True,
+                                        required=False, default=0, min_value=0)
+    update_cost_price = serializers.BooleanField(write_only=True, required=False, default=False)
+    received_by = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(is_active=True), required=False, allow_null=True)
+
+
+    class Meta:
+        model = Supply
+        fields = ["id", "reference", "supplier", "supply_date", "supplier_ref", "notes",
+                "received_by", "items", "create_bill", "tax_rate", "update_cost_price"]
+        read_only_fields = ["id", "reference"]
+
+    def validate_supplier(self, value):
+        unchanged = self.instance and value.pk == self.instance.supplier_id
+        if not value.is_active and not unchanged:
+            raise serializers.ValidationError("This supplier is inactive.")
+        return value
+
+    def validate_supply_date(self, value):
+        if value > timezone.localdate():
+            raise serializers.ValidationError("Supply date cannot be in the future.")
+        return value
+
+    def validate_items(self, items):
+        if not items:
+            raise serializers.ValidationError("Add at least one product.")
+        seen = set()
+        for it in items:
+            pid = it["product"].pk
+            if pid in seen:
+                raise serializers.ValidationError(
+                    f"'{it['product'].name}' is listed more than once. Combine it into one line.")
+            seen.add(pid)
+        return items
+
+    def validate(self, attrs):
+        if attrs.get("create_bill") and not self.instance:
+            if sum(i["quantity"] * i["unit_cost"] for i in attrs["items"]) <= 0:
+                raise serializers.ValidationError(
+                    {"create_bill": "Enter unit costs before creating an invoice (total is zero)."})
+        return attrs
+
+    def _user(self):
+        request = self.context.get("request")
+        return request.user if request and request.user.is_authenticated else None
+
+    @transaction.atomic
+    def create(self, validated_data):
+        items = validated_data.pop("items")
+        create_bill = validated_data.pop("create_bill", False)
+        tax_rate = validated_data.pop("tax_rate", Decimal("0"))
+        update_cost = validated_data.pop("update_cost_price", False)
+        user = self._user()
+        received_by = validated_data.pop("received_by", None) or user
+        supply = Supply.objects.create(received_by=received_by, **validated_data)
+
+        for it in items:
+            product, qty, cost = it["product"], it["quantity"], it["unit_cost"]
+            SupplyItem.objects.create(supply=supply, product=product, quantity=qty,
+                          unit_cost=cost, tax_rate=it["tax_rate"])
+            row, _ = StoreStock.objects.select_for_update().get_or_create(
+                product=product, defaults={"quantity": 0})
+            row.quantity += qty
+            row.save(update_fields=["quantity", "updated_at"])
+            StoreMovement.objects.create(
+                product=product, movement_type=StoreMovement.MovementType.RECEIVED,
+                quantity_change=qty, balance_after=row.quantity,
+                note=f"Supply {supply.reference} from {supply.supplier.name}", created_by=user,
+            )
+            if update_cost and cost > 0:
+                product.cost_price = cost
+                product.save(update_fields=["cost_price", "updated_at"])
+
+        if create_bill:
+            build_supply_bill(supply, tax_rate=tax_rate)
+        return supply
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        items = validated_data.pop("items")
+        validated_data.pop("create_bill", None)
+        validated_data.pop("tax_rate", None)
+        validated_data.pop("received_by", None)
+        update_cost = validated_data.pop("update_cost_price", False)
+        received_by = validated_data.pop("received_by", None)
+        user = self._user()
+
+        supply = Supply.objects.select_for_update().get(pk=instance.pk)
+        
+
+        if supply.status != Supply.Status.RECEIVED:
+            raise serializers.ValidationError("A cancelled supply can't be edited.")
+        if supply.purchase_invoice and supply.purchase_invoice.payments_made.filter(status="paid").exists():
+            raise serializers.ValidationError(
+                "The invoice for this supply has payments. Cancel those payments before editing.")
+
+        old = {i.product_id: i.quantity for i in supply.items.all()}
+        new = {it["product"].pk: it for it in items}
+        products = Product.objects.in_bulk(set(old) | set(new))
+
+        # 1) Work out the change per product and check the Store can take it
+        deltas, rows = {}, {}
+        for pid in set(old) | set(new):
+            delta = (new[pid]["quantity"] if pid in new else 0) - old.get(pid, 0)
+            if delta == 0:
+                continue
+            row, _ = StoreStock.objects.select_for_update().get_or_create(
+                product_id=pid, defaults={"quantity": 0})
+            if row.quantity + delta < 0:
+                raise serializers.ValidationError(
+                    f'Can\'t reduce "{products[pid].name}" by {abs(delta)}: only {row.quantity} '
+                    f"left in the store. Some may already have been moved to Head Office.")
+            deltas[pid], rows[pid] = delta, row
+
+        # 2) Apply the stock changes
+        for pid, delta in deltas.items():
+            row = rows[pid]
+            row.quantity += delta
+            row.save(update_fields=["quantity", "updated_at"])
+            StoreMovement.objects.create(
+                product=products[pid], movement_type=StoreMovement.MovementType.ADJUSTMENT,
+                quantity_change=delta, balance_after=row.quantity,
+                note=f"Edited supply {supply.reference}", created_by=user,
+            )
+
+        # 3) Save the supply and replace its lines
+        if received_by:
+                    supply.received_by = received_by
+        for field in ("supplier", "supply_date", "supplier_ref", "notes"):
+            if field in validated_data:
+                setattr(supply, field, validated_data[field])
+        supply.save()
+        supply.items.all().delete()
+        SupplyItem.objects.bulk_create([
+            SupplyItem(supply=supply, product=it["product"], quantity=it["quantity"],
+                       unit_cost=it["unit_cost"], tax_rate=it["tax_rate"])
+            for it in items
+        ])
+           
+        if update_cost:
+            for it in items:
+                if it["unit_cost"] > 0:
+                    it["product"].cost_price = it["unit_cost"]
+                    it["product"].save(update_fields=["cost_price", "updated_at"])
+
+        # 4) Keep the invoice in step with the new lines
+        sync_supply_bill(supply)
+        return supply
+
+    def to_representation(self, instance):
+        return SupplySerializer(instance, context=self.context).data

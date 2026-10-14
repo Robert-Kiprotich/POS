@@ -37,6 +37,7 @@ import MenuAccess from "../pages/acess/MenuAcceess";
 import Reports from "../pages/reports/Reports";
 import BusinessPayments from "../pages/payments/PaymentsList";
 import Store from "../pages/stock/Store";
+import SupplyList from "../pages/suppliers/Supplies";
 
 
 const route = all_routes;
@@ -79,7 +80,7 @@ export const publicRoutes = [
     path: route.sales,
     element: <SalesList />,
     route: Route,
-    meta_title: "Platform Settings",
+    meta_title: "Sales",
     
   },
   {
@@ -219,6 +220,14 @@ export const publicRoutes = [
     element: <SupplierList />,
     route: Route,
     meta_title: "Suppliers",
+    
+  },
+  {
+    id: "216",
+    path: route.supplies,
+    element: <SupplyList />,
+    route: Route,
+    meta_title: "Supplies",
     
   },
   {

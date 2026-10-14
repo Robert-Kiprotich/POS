@@ -25,13 +25,16 @@ router.register(r"suppliers", SupplierViewSet, basename="supplier")
 router.register(r"business-payments", BusinessPaymentViewSet, basename="business-payment")
 router.register(r"store", StoreViewSet, basename="store")
 router.register(r"store-movements", StoreMovementViewSet, basename="store-movement")
- 
+router.register(r"deposits", DepositViewSet, basename="deposit")
+router.register(r"petty-cash", PettyCashExpenseViewSet, basename="petty-cash")
+router.register(r"supplies", SupplyViewSet, basename="supply") 
 
 app_name = "api"
 
 urlpatterns = [
      path("admin-dashboard/", admin_dashboard, name="admin-dashboard"),
      path("cashier-records/", cashier_records, name="cashier-records"),
+    
      path("menu-permissions/", menu_permissions, name="menu-permissions"),
     path("menu-permissions/mine/", my_menu_access, name="my-menu-access"),
      path("reports/options/", report_options, name="report-options"),
@@ -76,6 +79,8 @@ def api_root_view(request, format=None):
         'business-payments': base_url + 'business-payments/',
         'store': base_url + 'store/',
         'store-movements': base_url + 'store-movements/',
+        'deposits': base_url + 'deposits/',
+        'petty-cash': base_url + 'petty-cash/',
     })
 
 

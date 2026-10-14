@@ -181,9 +181,9 @@ function printPrescription(item: any) {
 <body>
   <div class="head">
     <div class="biz">
-      <h1>SUPER KIMIA AGRO SOLUTIONS</h1>
-      <p>202202, Mpeketoni</p>
-      <p>Tel: 0722285664</p>
+      <h1>SUPER AGRO SOLUTIONS</h1>
+      <p>P.o Box 173, Mpeketoni</p>
+      <p>Tel: 0700496690</p>
     </div>
     <div class="rx">
       <div class="no">${rxNo}</div>

@@ -231,20 +231,20 @@ const MainDashboard = () => {
 
           {/* Page Header */}
           <div className="d-flex align-items-center justify-content-between gap-2 mb-4 flex-wrap">
-            <div>
-              <h4 className="mb-0">{roleName ? `${roleName} Dashboard` : "Dashboard"}</h4>
-                            {(rangeCaption || activeBranchName) && (
-                <p className="text-muted fs-12 mb-0 mt-1">
+  <div style={{ flex: "1 1 240px", minWidth: 0 }}>
+    <h4 className="mb-0 text-truncate">{roleName ? `${roleName} Dashboard` : "Dashboard"}</h4>
+    {(rangeCaption || activeBranchName) && (
+      <p className="text-muted fs-12 mb-0 mt-1 text-truncate">
                   {activeBranchName && <><i className="ti ti-building-store me-1" />{activeBranchName}{rangeCaption ? " · " : ""}</>}
                   {rangeCaption && <><i className="ti ti-calendar me-1" />{rangeCaption}</>}
                 </p>
               )}
             </div>
-            <div className="gap-2 d-flex align-items-center flex-wrap">
-                            {isHO && (
-                <select
-                  className="form-select form-select-sm"
-                  style={{ width: 170 }}
+         <div className="gap-2 d-flex align-items-center flex-wrap ms-auto">
+  {isHO && (
+    <select
+      className="form-select form-select-sm"
+      style={{ width: 170, flexShrink: 0 }}
                   value={branchFilter}
                   onChange={e => setBranchFilter(e.target.value)}
                 >
@@ -273,9 +273,10 @@ const MainDashboard = () => {
               <div className="position-relative" ref={datePickerRef}>
                 <button
                   type="button"
-                  className={`btn btn-sm d-flex align-items-center gap-2 ${rangeType === "custom" ? "btn-primary" : "btn-outline-secondary"}`}
-                  onClick={() => setShowDatePicker(p => !p)}
-                  title="Set custom date range"
+                 className={`btn btn-sm d-flex align-items-center justify-content-center gap-2 ${rangeType === "custom" ? "btn-primary" : "btn-outline-secondary"}`}
+style={{ width: 200 }}
+onClick={() => setShowDatePicker(p => !p)}
+title="Set custom date range"
                 >
                   <i className="ti ti-calendar" />
                   <span className="fs-12">
@@ -340,25 +341,78 @@ const MainDashboard = () => {
           )}
 
           {/* ───────── STEP 4: KPI tiles ───────── */}
-          {showSales && (
+                    {showSales && (
             <>
+              {/* Sales */}
               <div className="row g-3 mb-4">
-                <KpiTile col={kpiCol} label={`${noun} Sales`} color="#E41F07" bg="#FFE7E1" icon="ti-currency-dollar"
+                <KpiTile col="col-xl-3 col-sm-6 d-flex" label={`${noun} Sales`} color="#E41F07" bg="#FFE7E1" icon="ti-currency-dollar"
                   value={loading ? "—" : currency(d?.sales?.total)} footer={trendFooter(d?.sales?.change_pct)} />
 
-                <KpiTile col={kpiCol} label={`${noun} Orders`} color="#FFA201" bg="#FFF4E6" icon="ti-receipt"
-                  value={loading ? "—" : d?.orders?.total} footer={trendFooter(d?.orders?.change_pct)} />
+                {/* <KpiTile col="col-xl-3 col-sm-6 d-flex" label={`${noun} Orders`} color="#FFA201" bg="#FFF4E6" icon="ti-receipt"
+                  value={loading ? "—" : d?.orders?.total} footer={trendFooter(d?.orders?.change_pct)} /> */}
 
-                {showProfit && (
-                  <KpiTile col={kpiCol} label={`${noun} Profit`} color="#10B981" bg="#D1FAE5" icon="ti-trending-up"
-                    value={loading ? "—" : currency(d?.profit?.total)} footer={trendFooter(d?.profit?.change_pct)} />
-                )}
+                <KpiTile col="col-xl-3 col-sm-6 d-flex" label={`${noun} Retail Sales`} color="#0092E4" bg="#E0F2FE" icon="ti-shopping-cart"
+                  value={loading ? "—" : currency(d?.retail_sales?.total ?? 0)}
+                  footer={<>
+                    {!loading && pctBadge(d?.retail_sales?.change_pct ?? 0)}
+                    <p className="text-muted mb-0 fs-13">{loading ? "" : `${d?.retail_sales?.count ?? 0} sale(s) · ${pctLabel}`}</p>
+                  </>} />
 
-                <KpiTile col={kpiCol} label="Items Sold" color="#0092E4" bg="#E0F2FE" icon="ti-package"
-                  value={loading ? "—" : d?.items_sold?.total} footer={trendFooter(d?.items_sold?.change_pct)} />
+                <KpiTile col="col-xl-3 col-sm-6 d-flex" label={`${noun} Wholesale Sales`} color="#8B5CF6" bg="#EDE9FE" icon="ti-building-warehouse"
+                  value={loading ? "—" : currency(d?.wholesale_sales?.total ?? 0)}
+                  footer={<>
+                    {!loading && pctBadge(d?.wholesale_sales?.change_pct ?? 0)}
+                    <p className="text-muted mb-0 fs-13">{loading ? "" : `${d?.wholesale_sales?.count ?? 0} sale(s) · ${pctLabel}`}</p>
+                  </>} />
               </div>
 
+              {/* Credit sales */}
               <div className="row g-3 mb-4">
+                <KpiTile col="col-xl-6 col-sm-6 d-flex" label={`${noun} Credit Sales · Pending`}
+                  color="#F59E0B" bg="#FEF3C7" icon="ti-clock-dollar"
+                  value={loading ? "—" : currency(d?.credit_sales?.pending?.total ?? 0)}
+                  footer={<p className="text-muted mb-0 fs-13">
+                    {loading ? "" : `${d?.credit_sales?.pending?.count ?? 0} credit sale(s) awaiting payment`}</p>} />
+                <KpiTile col="col-xl-6 col-sm-6 d-flex" label={`${noun} Credit Sales · Completed`}
+                  color="#10B981" bg="#D1FAE5" icon="ti-circle-check"
+                  value={loading ? "—" : currency(d?.credit_sales?.completed?.total ?? 0)}
+                  footer={<p className="text-muted mb-0 fs-13">
+                    {loading ? "" : `${d?.credit_sales?.completed?.count ?? 0} credit sale(s) completed`}</p>} />
+              </div>
+
+              {/* Everything else */}
+              <div className="row g-3 mb-4">
+                {showProfit && (
+                  <KpiTile col="col-xl-4 col-sm-6 d-flex" label={`${noun} Net Profit`} color="#10B981" bg="#D1FAE5" icon="ti-trending-up"
+                    value={loading ? "—" : currency(d?.profit?.total)}
+                    footer={
+                      <div className="w-100">
+                        <div className="d-flex align-items-center gap-2 flex-wrap">
+                          {trendFooter(d?.profit?.change_pct)}
+                        </div>
+                        {!loading && (
+                          <div className="fs-12 text-muted mt-2 border-top pt-2">
+                            <div className="d-flex justify-content-between">
+                              <span>Gross profit</span><span>{currency(d?.profit?.gross)}</span>
+                            </div>
+                            <div className="d-flex justify-content-between">
+                              <span>Petty cash</span><span className="text-danger">−{currency(d?.profit?.petty_cash)}</span>
+                            </div>
+                            <div className="d-flex justify-content-between">
+                              <span>Business expenses</span><span className="text-danger">−{currency(d?.profit?.business_expenses)}</span>
+                            </div>
+                            <div className="d-flex justify-content-between">
+                              <span>Salaries</span><span className="text-danger">−{currency(d?.profit?.salaries)}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    } />
+                )}
+
+                <KpiTile col="col-xl-4 col-sm-6 d-flex" label="Items Sold" color="#0092E4" bg="#E0F2FE" icon="ti-package"
+                  value={loading ? "—" : d?.items_sold?.total} footer={trendFooter(d?.items_sold?.change_pct)} />
+
                 <KpiTile col="col-xl-4 col-sm-6 d-flex" label="Total Customers" color="#8B5CF6" bg="#EDE9FE" icon="ti-users"
                   value={loading ? "—" : d?.customers?.total} footer={trendFooter(d?.customers?.change_pct)} />
 
@@ -500,10 +554,7 @@ const MainDashboard = () => {
               </div>
             </div>
           )}
-
-          {/* ───────── STEP 6 + 7: bottom row cards ───────── */}
-          <div className="row">
-                    {isHO && !branchFilter && !loading && perfRows.length > 0 && (
+   {isHO && !branchFilter && !loading && perfRows.length > 0 && (
             <div className="row g-3 mb-4">
               <div className="col-12 d-flex">
                 <div className="card flex-fill border-0 shadow-sm" style={{ borderTop: "3px solid #10B981" }}>
@@ -563,6 +614,9 @@ const MainDashboard = () => {
               </div>
             </div>
           )}
+          {/* ───────── STEP 6 + 7: bottom row cards ───────── */}
+          <div className="row">
+                   
             {/* 1. Top Selling Products — wrapped in showSales */}
             {showSales && (
               <div className="col-xxl-4 col-xl-12 d-flex">
