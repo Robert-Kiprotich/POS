@@ -124,6 +124,10 @@ const totalProfit = sales
         (s.order_number  || "").toLowerCase().includes(q) ||
         (s.customer_name || "").toLowerCase().includes(q) ||
         (s.cashier_name  || "").toLowerCase().includes(q)
+        (s.branch_name || "").toLowerCase().includes(q) ||
+        (s.status  || "").toLowerCase().includes(q)
+        (s.sale_type || "").toLowerCase().includes(q) 
+        
       );
     }
     setFiltered(list);

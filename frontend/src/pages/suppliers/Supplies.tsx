@@ -3,12 +3,14 @@ import * as XLSX from "xlsx";
 import API from "../../services/api";
 import { showConfirm, showSuccess, showError } from "../../components/alerts/Alerts";
 import { buildInvoiceHtml, printInvoice } from "../../utils/invoiveTemplate";
+import { useNavigate, useLocation } from "react-router";
 
 // ───────────────────────── helpers ─────────────────────────
 const money = (n: any) =>
   `KES ${Number(n || 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const today = () => new Date().toISOString().slice(0, 10);
+const DRAFT_KEY = "supply_draft";
 
 const STATUS_CLS: Record<string, string> = {
   received: "badge bg-success-transparent text-success",
@@ -114,7 +116,11 @@ export default function SupplyList() {
   const [invoiceBusy, setInvoiceBusy] = useState(false);
   const [invoiceError, setInvoiceError] = useState("");
   const [mode, setMode] = useState<"form" | "view">("form");
-  const [users, setUsers] = useState<any[]>([]); // the same offcanvas serves both
+  const [users, setUsers] = useState<any[]>([]); 
+  const navigate = useNavigate();
+const location = useLocation();
+const [supplierQuery, setSupplierQuery] = useState("");
+const [showSupplierList, setShowSupplierList] = useState(false);
 
 
   
@@ -169,12 +175,71 @@ const userName = (u: any) => `${u.firstname || ""} ${u.lastname || ""}`.trim() |
         (s.supplier_name || "").toLowerCase().includes(q) ||
        
         (s.items || []).some((i: any) =>
-          (i.product_name || "").toLowerCase().includes(q) || (i.item_number || "").toLowerCase().includes(q))
+          (i.product_name || "").toLowerCase().includes(q) ||
+         (i.item_number || "").toLowerCase().includes(q))
       );
     }
     return list;
   }, [supplies, supplierFilter, statusFilter, dateFrom, dateTo, search]);
+  // ── supplier type-ahead ──
+  const supplierSuggestions = useMemo(() => {
+    const q = supplierQuery.trim().toLowerCase();
+    const active = suppliers.filter(s => s.is_active);
+    if (!q) return active.slice(0, 8);
+    const starts   = active.filter(s => (s.name || "").toLowerCase().startsWith(q));
+    const contains = active.filter(
+      s => !(s.name || "").toLowerCase().startsWith(q) && (s.name || "").toLowerCase().includes(q)
+    );
+    return [...starts, ...contains].slice(0, 8);
+  }, [supplierQuery, suppliers]);
 
+  const exactSupplierMatch = suppliers.some(
+    s => (s.name || "").trim().toLowerCase() === supplierQuery.trim().toLowerCase()
+  );
+
+  function selectSupplier(s: any) {
+    setForm((f: any) => ({ ...f, supplier: String(s.id) }));
+    setSupplierQuery(s.name);
+    setShowSupplierList(false);
+  }
+
+  function goRegisterSupplier() {
+    try {
+      sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ form, lines }));
+    } catch { /* ignore */ }
+    navigate("/suppliers", {   // ← replace with your all_routes entry if you have one
+      state: { registerSupplier: true, name: supplierQuery.trim(), returnTo: "/supplies" },
+    });
+  }
+
+  // Returning from supplier registration: reopen the form with the new supplier selected
+  useEffect(() => {
+    const st = location.state as any;
+    if (!st?.newSupplierId || suppliers.length === 0) return;
+    const s = suppliers.find(x => x.id === st.newSupplierId);
+    if (!s) return;
+
+    let draft: any = null;
+    try { draft = JSON.parse(sessionStorage.getItem(DRAFT_KEY) || "null"); } catch { /* ignore */ }
+    sessionStorage.removeItem(DRAFT_KEY);
+
+    setMode("form");
+    setViewing(null);
+    setEditingId(null);
+    setForm({
+      ...emptyForm,
+      ...(draft?.form || {}),
+      supply_date: draft?.form?.supply_date || today(),
+      supplier: String(s.id),
+    });
+    setLines(draft?.lines || []);
+    setSupplierQuery(s.name);
+    setProductQuery(""); setProductResults([]);
+    setFormError("");
+    setShowForm(true);
+
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, suppliers]); // eslint-disable-line react-hooks/exhaustive-deps
   const activeFilterCount = [supplierFilter !== "all", statusFilter !== "all", !!dateFrom, !!dateTo].filter(Boolean).length;
   function resetFilters() {
     setSupplierFilter("all"); setStatusFilter("all"); setDateFrom(""); setDateTo(""); setSearch("");
@@ -227,6 +292,7 @@ const formTotal = formSub + formVat;
     setEditingId(null);
     setForm({ ...emptyForm, supply_date: today() });
     setLines([]);
+        setSupplierQuery("");
     setProductQuery(""); setProductResults([]);
     setFormError("");
     setShowForm(true);
@@ -243,6 +309,7 @@ const formTotal = formSub + formVat;
     setMode("form");
     setViewing(null);
     setEditingId(s.id);
+    setSupplierQuery(s.supplier_name || "");
        const taxedLine = (s.items || []).find((i: any) => Number(i.tax_rate) > 0);
     setForm({
       ...emptyForm,
@@ -267,7 +334,7 @@ const formTotal = formSub + formVat;
 
   async function handleSubmit() {
     setFormError("");
-    if (!form.supplier) return setFormError("Select the supplier.");
+    if (!form.supplier) return setFormError("Select a supplier from the suggestions, or register a new one.");
     if (!form.supply_date) return setFormError("Enter the supply date.");
     if (lines.length === 0) return setFormError("Search and add at least one product.");
     for (const l of lines) {
@@ -630,14 +697,56 @@ const formTotal = formSub + formVat;
               {formError && <div className="alert alert-danger fs-13 py-2">{formError}</div>}
 
               <div className="row g-2 mb-3">
-                <div className="col-md-6">
+                                <div className="col-md-6">
                   <label className="form-label fs-13 fw-medium">Supplier <span className="text-danger">*</span></label>
-                  <select className="form-select" value={form.supplier} onChange={set("supplier")}>
-                    <option value="">Select supplier…</option>
-                    {suppliers
-                      .filter(s => s.is_active || String(s.id) === String(form.supplier))
-                      .map(s => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
-                  </select>
+                  <div className="position-relative">
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      className={`form-control ${form.supplier ? "is-valid" : ""}`}
+                      placeholder="Type to search suppliers…"
+                      value={supplierQuery}
+                      onChange={e => {
+                        setSupplierQuery(e.target.value);
+                        setForm((f: any) => ({ ...f, supplier: "" }));
+                        setShowSupplierList(true);
+                      }}
+                      onFocus={() => setShowSupplierList(true)}
+                      onBlur={() => {
+                        setShowSupplierList(false);
+                        if (!form.supplier) {
+                          const m = suppliers.find(
+                            s => s.is_active && (s.name || "").trim().toLowerCase() === supplierQuery.trim().toLowerCase()
+                          );
+                          if (m) selectSupplier(m);
+                        }
+                      }}
+                    />
+                    {showSupplierList && (supplierSuggestions.length > 0 || supplierQuery.trim()) && (
+                      <div className="list-group position-absolute w-100 shadow-sm"
+                           style={{ zIndex: 30, top: "100%", maxHeight: 260, overflowY: "auto" }}>
+                        {supplierSuggestions.map(s => (
+                          <button key={s.id} type="button"
+                            className="list-group-item list-group-item-action fs-13 py-2"
+                            onMouseDown={e => { e.preventDefault(); selectSupplier(s); }}>
+                            <span className="fw-medium">{s.name}</span>
+                            {s.phone && <span className="text-muted ms-2 fs-12">{s.phone}</span>}
+                          </button>
+                        ))}
+                        {supplierQuery.trim() && !exactSupplierMatch && (
+                          <div className="list-group-item fs-12 text-muted">
+                            {supplierSuggestions.length === 0
+                              ? <>No supplier named "<strong>{supplierQuery.trim()}</strong>". </>
+                              : <>Not in the list? </>}
+                            <a href="#" className="fw-semibold"
+                               onMouseDown={e => { e.preventDefault(); goRegisterSupplier(); }}>
+                              <i className="ti ti-plus" /> Register this supplier
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="col-md-3">
                   <label className="form-label fs-13 fw-medium">Supply date <span className="text-danger">*</span></label>

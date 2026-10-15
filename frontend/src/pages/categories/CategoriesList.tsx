@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import * as XLSX from "xlsx";
 import API from "../../services/api";
+import { useNavigate, useLocation } from "react-router";
 
 function fmtDate(iso: string) {
   if (!iso) return "";
@@ -68,6 +69,10 @@ export default function CategoriesList() {
   const [form, setForm]                 = useState<CategoryForm>(emptyForm);
   const [saving, setSaving]             = useState(false);
   const [error, setError]               = useState("");
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [returnTo, setReturnTo] = useState<string | undefined>((location.state as any)?.returnTo);
+
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -99,6 +104,7 @@ export default function CategoriesList() {
 
   // Open Offcanvas Handlers
   const handleOpenAdd = () => {
+     setReturnTo(undefined);
     setMode("add");
     setSelected(null);
     setForm(emptyForm);
@@ -145,7 +151,15 @@ export default function CategoriesList() {
       }
     }
   };
-
+useEffect(() => {
+    const st = location.state as any;
+    if (!st?.registerCategory) return;
+    setMode("add");
+    setSelected(null);
+    setError("");
+    setForm({ ...emptyForm, name: st.name || "" });
+    setTimeout(openOffcanvas, 0);
+  }, []); 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.name.trim()) {
@@ -157,10 +171,22 @@ export default function CategoriesList() {
     setError("");
 
     try {
-      if (mode === "edit" && selectedCategory) {
+           if (mode === "edit" && selectedCategory) {
         await API.patch(`categories/${selectedCategory.id}/`, form);
       } else {
-        await API.post("categories/", form);
+        const res = await API.post("categories/", form);
+
+        if (returnTo) {
+          const el = document.getElementById("category-offcanvas");
+          const goBack = () => navigate(returnTo, { state: { newCategoryId: res.data.id } });
+          if (el) {
+            el.addEventListener("hidden.bs.offcanvas", goBack, { once: true });
+            closeOffcanvas();
+          } else {
+            goBack();
+          }
+          return;
+        }
       }
       closeOffcanvas();
       load();
@@ -358,7 +384,12 @@ export default function CategoriesList() {
 
         <div className="offcanvas-body">
           {error && <div className="alert alert-danger fs-13 py-2">{error}</div>}
-
+                    {returnTo && mode === "add" && (
+            <div className="alert alert-info fs-12 py-2">
+              <i className="ti ti-info-circle me-1" />
+              After saving, you'll go back to Products with this category selected.
+            </div>
+          )}
           {mode === "view" && selectedCategory ? (
             <div className="d-flex flex-column gap-3 fs-13">
               <div>

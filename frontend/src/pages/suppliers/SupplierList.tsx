@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import * as XLSX from "xlsx";
 import API from "../../services/api";
+import { useNavigate, useLocation } from "react-router";
 
 const TERMS: Record<string, string> = {
   cash: "Cash on delivery",
@@ -82,6 +83,9 @@ function errorMessage(err: any) {
 
 export default function SupplierList() {
   const [suppliers, setSuppliers] = useState<any[]>([]);
+    const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = (location.state as any)?.returnTo as string | undefined;
   const [filtered, setFiltered] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -120,7 +124,15 @@ export default function SupplierList() {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setPage(1); }, [search, statusFilter, termsFilter]);
-
+ useEffect(() => {
+    const st = location.state as any;
+    if (st?.registerSupplier) {
+      setEditingId(null);
+      setForm({ ...emptyForm, name: st.name || "" });
+      setFormError("");
+      setShowOffcanvas(true);
+    }
+  }, []);
   useEffect(() => {
     let list = suppliers;
     if (statusFilter === "active") list = list.filter(s => s.is_active);
@@ -133,7 +145,9 @@ export default function SupplierList() {
         (s.contact_person || "").toLowerCase().includes(q) ||
         (s.phone || "").toLowerCase().includes(q) ||
         (s.email || "").toLowerCase().includes(q) ||
-        (s.kra_pin || "").toLowerCase().includes(q)
+        (s.kra_pin || "").toLowerCase().includes(q) ||
+        (s.bank_name || "").toLowerCase().includes(q) ||
+        (s.address || "").toLowerCase().includes(q)
       );
     }
     setFiltered(list);
@@ -185,11 +199,17 @@ export default function SupplierList() {
 
     setSaving(true);
     try {
-      if (editingId) await API.put(`suppliers/${editingId}/`, form);
-      else await API.post("suppliers/", form);
+      const res = editingId
+        ? await API.put(`suppliers/${editingId}/`, form)
+        : await API.post("suppliers/", form);
       setShowOffcanvas(false);
+
+      if (!editingId && returnTo) {
+        navigate(returnTo, { state: { newSupplierId: res.data.id } });
+        return;
+      }
       load();
-    } catch (err: any) {
+    }  catch (err:any){
       console.error("Error saving supplier:", err);
       setFormError(errorMessage(err));
     } finally {
@@ -411,7 +431,12 @@ export default function SupplierList() {
             </div>
             <div className="offcanvas-body">
               {formError && <div className="alert alert-danger fs-13 py-2">{formError}</div>}
-
+                        {returnTo && !editingId && (
+                <div className="alert alert-info fs-12 py-2">
+                  <i className="ti ti-info-circle me-1" />
+                  After saving, you'll go back to Record Supply with this supplier selected.
+                </div>
+              )}
               <div className="mb-3">
                 <label className="form-label fs-13 fw-medium">Supplier name <span className="text-danger">*</span></label>
                 <input className="form-control" value={form.name} onChange={set("name")} placeholder="e.g. Cooper Kenya Ltd" />

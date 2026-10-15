@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef,useMemo } from "react";
 import * as XLSX from "xlsx";
-import { Link } from "react-router";
+import { Link,useNavigate, useLocation } from "react-router";
 import API from "../../services/api";
 import { all_routes } from "../../routes/all_routes";
 import { showSuccess, showError, showWarning, showConfirm } from "../../components/alerts/Alerts";
@@ -8,7 +8,7 @@ import { useAutoRefresh } from "../../hooks/useAutoRefresh";
 import { useBranchAccess } from "../../hooks/useBranchAccess";
 
 const route = all_routes;
-
+const PRODUCT_DRAFT_KEY = "product_draft";
 function fmtDate(iso: string) {
   if (!iso) return "";
   return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
@@ -147,7 +147,12 @@ export default function ProductsList() {
     const [branchPrices, setBranchPrices] = useState<any[]>([]);
   const [loadingBP, setLoadingBP]       = useState(false);
     const { isHO, userBranchId, loading: loadingAccess } = useBranchAccess();
-    const [showMfrList, setShowMfrList]         = useState(false);   // ← add
+    const [showMfrList, setShowMfrList]         = useState(false);
+    const navigate = useNavigate();
+const location = useLocation();
+const openBtnRef = useRef<HTMLButtonElement>(null);
+const [categoryQuery, setCategoryQuery]     = useState("");
+const [showCatList, setShowCatList]         = useState(false);
 
   const [form, setForm] = useState<ProductForm>({
   name: "",
@@ -189,6 +194,73 @@ export default function ProductsList() {
     const used = products.map(p => (p.pack_size || "").trim()).filter(Boolean);
     return Array.from(new Set([...defaults, ...used]));
   }, [products]);
+
+    // ── category type-ahead ──
+  const categorySuggestions = useMemo(() => {
+    const q = categoryQuery.trim().toLowerCase();
+    if (!q) return categoriesList.slice(0, 8);
+    const starts   = categoriesList.filter(c => c.name.toLowerCase().startsWith(q));
+    const contains = categoriesList.filter(
+      c => !c.name.toLowerCase().startsWith(q) && c.name.toLowerCase().includes(q)
+    );
+    return [...starts, ...contains].slice(0, 8);
+  }, [categoryQuery, categoriesList]);
+
+  const exactCategoryMatch = categoriesList.some(
+    c => c.name.trim().toLowerCase() === categoryQuery.trim().toLowerCase()
+  );
+
+  function selectCategory(c: CategoryOption) {
+    setForm(f => ({ ...f, category: c.id }));
+    setCategoryQuery(c.name);
+    setShowCatList(false);
+  }
+
+  function goRegisterCategory() {
+    try {
+      sessionStorage.setItem(
+        PRODUCT_DRAFT_KEY,
+        JSON.stringify({ mode, productId: selectedProduct?.id ?? null, form })
+      );
+    } catch { /* ignore */ }
+
+    const dest = {
+      state: { registerCategory: true, name: categoryQuery.trim(), returnTo: "/products" }, // ← use your route paths
+    };
+    const el = document.getElementById("product-offcanvas");
+    if (el) {
+      el.addEventListener("hidden.bs.offcanvas", () => navigate("/categories", dest), { once: true });
+      document.getElementById("product-offcanvas-close")?.click();
+    } else {
+      navigate("/categories", dest);
+    }
+  }
+
+  // Returning from category registration: reopen the panel with the new category selected
+  useEffect(() => {
+    const st = location.state as any;
+    if (!st?.newCategoryId || categoriesList.length === 0) return;
+    const c = categoriesList.find(x => String(x.id) === String(st.newCategoryId));
+    if (!c) return;
+
+    let draft: any = null;
+    try { draft = JSON.parse(sessionStorage.getItem(PRODUCT_DRAFT_KEY) || "null"); } catch { /* ignore */ }
+
+    if (draft?.mode === "edit" && products.length === 0) return;
+    sessionStorage.removeItem(PRODUCT_DRAFT_KEY);
+
+    const editing = draft?.mode === "edit" ? products.find(p => p.id === draft.productId) : null;
+    setMode(editing ? "edit" : "add");
+    setSelectedProduct(editing ?? null);
+    setError("");
+    setForm(draft?.form ? { ...draft.form, category: c.id } : f => ({ ...f, category: c.id }));
+    setCategoryQuery(c.name);
+
+    navigate(location.pathname, { replace: true, state: null });
+    setTimeout(() => openBtnRef.current?.click(), 0);
+  }, [location.state, categoriesList, products]); // eslint-disable-line react-hooks/exhaustive-deps
+
+
   /** Normalise a raw API product object into the flat shape expected */
   function normalizeProduct(p: any): any {
     const catName = (c: any) => {
@@ -294,7 +366,9 @@ const load = useCallback(async (silent = false) => {
       list = list.filter(p =>
         (p.name        || "").toLowerCase().includes(q) ||
         (p.item_number || "").toLowerCase().includes(q) ||
-        (p.category    || "").toLowerCase().includes(q)
+        (p.category    || "").toLowerCase().includes(q) ||
+        (p.manufacturer || "").toLowerCase().includes(q) ||
+        (p.pack_size    || "").toLowerCase().includes(q)
       );
     }
     setFiltered(list);
@@ -327,11 +401,12 @@ const load = useCallback(async (silent = false) => {
 const handleAdd = () => {
   setMode("add");
   setSelectedProduct(null);
+  setCategoryQuery("");
   setError("");
   setForm({
     name: "",
     item_number: "",
-    category: categoriesList[0]?.id ?? "",
+    category:  "",
     description: "",
     manufacturer: "",     // ← add
     pack_size: "",        // ← add
@@ -350,6 +425,7 @@ const handleEdit = (product: any) => {
   setMode("edit");
   setSelectedProduct(product);
   setError("");
+  setCategoryQuery(String(product.category ?? ""));
   setForm({
     name: product.name ?? "",
     item_number: product.item_number ?? "",
@@ -421,7 +497,9 @@ const handleEdit = (product: any) => {
       return;
     }
     if (!form.category) {
-      showWarning("Please select a category.", "Missing Information");
+
+            showWarning("Select a category from the suggestions, or register a new one.", "Missing Information");
+      
       setSaving(false);
       return;
     }
@@ -531,6 +609,9 @@ const handleEdit = (product: any) => {
 
   return (
     <div className="page-wrapper">
+
+            <button ref={openBtnRef} type="button" className="d-none"
+        data-bs-toggle="offcanvas" data-bs-target="#product-offcanvas" tabIndex={-1} aria-hidden="true" />
       <div className="content">
 
         {/* Header */}
@@ -1005,24 +1086,58 @@ const handleEdit = (product: any) => {
                 />
               </div>
 
-              <div>
+                           <div>
                 <label htmlFor="p-category" className="form-label fs-13 fw-medium mb-1">
                   Category <span className="text-danger">*</span>
                 </label>
-                <select
-                  id="p-category"
-                  className="form-select fs-13"
-                  required
-                  value={form.category}
-                  onChange={(e) => setForm({ ...form, category: e.target.value })}
-                >
-                  <option value="">Select Category</option>
-                  {categoriesList.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                <div className="position-relative">
+                  <input
+                    id="p-category"
+                    type="text"
+                    autoComplete="off"
+                    className={`form-control fs-13 ${form.category ? "is-valid" : ""}`}
+                    placeholder="Type to search categories…"
+                    value={categoryQuery}
+                    onChange={(e) => {
+                      setCategoryQuery(e.target.value);
+                      setForm(f => ({ ...f, category: "" }));
+                      setShowCatList(true);
+                    }}
+                    onFocus={() => setShowCatList(true)}
+                    onBlur={() => {
+                      setShowCatList(false);
+                      if (!form.category) {
+                        const m = categoriesList.find(
+                          c => c.name.trim().toLowerCase() === categoryQuery.trim().toLowerCase()
+                        );
+                        if (m) selectCategory(m);
+                      }
+                    }}
+                  />
+                  {showCatList && (categorySuggestions.length > 0 || categoryQuery.trim()) && (
+                    <div className="list-group position-absolute w-100 shadow-sm"
+                         style={{ zIndex: 1060, top: "100%", maxHeight: 220, overflowY: "auto" }}>
+                      {categorySuggestions.map(c => (
+                        <button key={c.id} type="button"
+                          className="list-group-item list-group-item-action fs-13 py-2"
+                          onMouseDown={(e) => { e.preventDefault(); selectCategory(c); }}>
+                          {c.name}
+                        </button>
+                      ))}
+                      {categoryQuery.trim() && !exactCategoryMatch && (
+                        <div className="list-group-item fs-12 text-muted">
+                          {categorySuggestions.length === 0
+                            ? <>No category named "<strong>{categoryQuery.trim()}</strong>". </>
+                            : <>Not in the list? </>}
+                          <a href="#" className="fw-semibold"
+                             onMouseDown={(e) => { e.preventDefault(); goRegisterCategory(); }}>
+                            <i className="ti ti-plus" /> Register this category
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
                                 {/* ← end of Category <div> above */}
 
