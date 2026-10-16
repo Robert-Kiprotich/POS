@@ -678,7 +678,7 @@ const config = { headers: { "Content-Type": "multipart/form-data" } };
                     <tbody>
                       <tr className="table-light"><th colSpan={2}>Cheque</th></tr>
                       {detailRow("Cheque date", fmtDate(selected.cheque_date))}
-                      {detailRow("Received on", fmtDate(selected.received_on))}
+                      {detailRow("Deposited on", fmtDate(selected.received_on))}
                       {detailRow("Customer", selected.customer_name)}
                       {detailRow("Sale", selected.sale_order_number)}
                       {detailRow("Branch", selected.branch_name)}
@@ -900,7 +900,7 @@ const config = { headers: { "Content-Type": "multipart/form-data" } };
                       />
                     </div>
                     <div className="col-6">
-                      <label className="form-label fs-13 fw-medium mb-1">Received on</label>
+                      <label className="form-label fs-13 fw-medium mb-1">Deposited on</label>
                       <input
                         type="date" className="form-control fs-13" value={form.received_on} max={localToday()}
                         onChange={e => setForm(f => ({ ...f, received_on: e.target.value }))}

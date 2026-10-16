@@ -307,8 +307,8 @@ const visibleMenu = useMemo(() => {
         </div>
 
         <div className="sidebar-inner" data-simplebar="">
-          <OverlayScrollbarsComponent style={{ height: "100%", width: "100%",top:"50px" }}>
-            <div id="sidebar-menu" className="sidebar-menu">
+  <OverlayScrollbarsComponent style={{ height: "100%", width: "100%" }}>
+    <div id="sidebar-menu" className="sidebar-menu" style={{ paddingTop: 50, paddingBottom: 120 }}>
               <ul>
                                 {visibleMenu.map((mainLabel: any, index: number) => (
                   <React.Fragment key={`main-${index}`}>

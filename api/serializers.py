@@ -8,7 +8,11 @@ from decimal import *
 from datetime import timedelta as _td
 
 from .models import *
-
+def _is_sales_clerk_user(user):
+    if _is_admin_user(user):
+        return False
+    name = (getattr(getattr(user, "role", None), "role_name", "") or "").lower()
+    return ("sales clerk" in name or "cashier" in name) and "manager" not in name
 class BranchSerializer(serializers.ModelSerializer):
     class Meta:
         model = Branch
@@ -151,6 +155,8 @@ class CustomerSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if request:
             qs = scope_by_branch(qs, request, "branch_id")
+            if _is_sales_clerk_user(request.user):
+                qs = qs.filter(cashier=request.user)
         return CustomerSaleSerializer(qs, many=True).data
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -323,6 +329,16 @@ class SaleCreateSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         cashier = getattr(request, "user", None) if request else None
 
+        # Offline sales carry a client_uuid (added by the POS app)
+        is_offline = bool(self.initial_data.get("was_offline"))
+
+        # If someone else syncs the sale (e.g. an admin logs in on the till),
+        # credit the original cashier. Only admins may do this.
+        if is_offline and cashier and cashier.is_authenticated:
+            wanted = self.initial_data.get("cashier")
+            if wanted and str(wanted) != str(cashier.pk) and _is_admin_user(cashier):
+                cashier = User.objects.filter(pk=wanted, is_active=True).first() or cashier
+
         sale = Sale.objects.create(
             cashier=cashier if cashier and cashier.is_authenticated else None,
             **validated_data,
@@ -336,7 +352,7 @@ class SaleCreateSerializer(serializers.ModelSerializer):
                 branch=branch, product=product, defaults={"stock_quantity": 0}
             )
 
-            if item["quantity"] > branch_stock.stock_quantity:
+            if not is_offline and item["quantity"] > branch_stock.stock_quantity:
                 raise serializers.ValidationError(
                     f"Not enough stock for '{product.name}' at {branch.name}: "
                     f"requested {item['quantity']}, available {branch_stock.stock_quantity}."
@@ -533,7 +549,7 @@ class VeterinaryEPrescriptionSerializer(serializers.ModelSerializer):
 class SalesInvoiceSerializer(serializers.ModelSerializer):
     # --- Read-only conveniences ---
     status_display = serializers.CharField(source="get_status_display", read_only=True)
-    invoice_type_display = serializers.CharField(source="get_invoice_type_display", read_only=True)
+    invoice_type_display = serializers.SerializerMethodField()
     sale_order_number = serializers.CharField(source="sale.order_number", read_only=True, default=None)
     branch_name = serializers.CharField(source="sale.branch.name", read_only=True, default=None)
     customer_name = serializers.CharField(source="sale.customer.name", read_only=True, default=None)
@@ -545,7 +561,8 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
     payment_status = serializers.CharField(read_only=True)
     supply = serializers.PrimaryKeyRelatedField(
         queryset=Supply.objects.all(), write_only=True, required=False, allow_null=True)
-    previous_balance = serializers.SerializerMethodField()   # <- add
+    previous_balance = serializers.SerializerMethodField()  
+    previous_invoices = serializers.SerializerMethodField() # <- add
     items = serializers.ListField(child=serializers.DictField(), write_only=True, required=False)
 
     class Meta:
@@ -588,6 +605,7 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
             "payment_status",
             "items",
             "previous_balance",
+            "previous_invoices",
             "supply",
             # Timestamps
             "created_at",
@@ -610,6 +628,8 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
             if mutable.get(key) == "":
                 mutable[key] = None
         return super().to_internal_value(mutable)
+    def get_invoice_type_display(self, obj):
+         return "Purchase Invoice" if obj.invoice_type == "purchase" else "Sales Invoice"
     def get_previous_balance(self, obj):
         """Unpaid balance on this supplier's EARLIER purchase bills (excludes this one)."""
         if obj.invoice_type != "purchase" or not obj.supplier_id:
@@ -624,6 +644,31 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
                     Q(issue_date=obj.issue_date, id__lt=obj.id))
         )
         return earlier.aggregate(t=Coalesce(Sum("balance_due"), Decimal("0.00")))["t"]
+    def get_previous_invoices(self, obj):
+        """Earlier unpaid invoices for the same customer (sales/credit/supply invoices only)."""
+        from django.db.models import Q
+        if obj.invoice_type == "purchase" or not obj.pk:
+            return []
+
+        qs = (SalesInvoice.objects
+              .exclude(invoice_type="purchase")
+              .exclude(status="cancelled")
+              .filter(balance_due__gt=0)
+              .exclude(pk=obj.pk))
+
+        customer_id = obj.sale.customer_id if obj.sale_id else None
+        if customer_id:
+            qs = qs.filter(sale__customer_id=customer_id)
+        elif (obj.billed_to_name or "").strip():
+            qs = qs.filter(sale__isnull=True, billed_to_name__iexact=obj.billed_to_name.strip())
+        else:
+            return []
+
+        qs = qs.filter(Q(issue_date__lt=obj.issue_date) |
+                       Q(issue_date=obj.issue_date, id__lt=obj.id)).order_by("issue_date", "id")
+
+        return [{"invoice_number": i.invoice_number, "issue_date": i.issue_date,
+                 "total_amount": i.total_amount, "balance_due": i.balance_due} for i in qs]
     def validate_issue_date(self, value):
         if value is None:
             raise serializers.ValidationError("Issue date is required.")

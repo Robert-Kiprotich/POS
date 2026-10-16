@@ -153,6 +153,8 @@ class Sale(models.Model):
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     amount_paid = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     sale_type = models.CharField(max_length=20, default="Retail")
+    client_uuid = models.UUIDField(unique=True, null=True, blank=True, editable=False)
+    received_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

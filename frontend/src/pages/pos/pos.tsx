@@ -1,9 +1,13 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import API from "../../services/api";
 import { showSuccess, showError, showWarning } from "../../components/alerts/Alerts";
 import { useAutoRefresh } from "../../hooks/useAutoRefresh";
 import { useBranchAccess } from "../../hooks/useBranchAccess";
-
+import { useLiveQuery } from "dexie-react-hooks";
+import { db } from "../../offline/db";
+import { saveSale } from "../../offline/sales";
+import { printHtml } from "../../utils/printHtml";
 
 const PAYMENT_METHODS = ["Cash", "Card", "M-Pesa", "Bank Transfer", "Other"] as const;
 const SALE_TYPES = ["Retail", "Wholesale","Credit"] as const;
@@ -171,14 +175,8 @@ function buildReceiptText(opts: {
 function isA4Type(saleType: string) {
   return saleType === "Wholesale" || saleType === "Credit";
 }
-
 function printReceiptText(receiptText: string, title: string, saleType: string) {
   const a4 = isA4Type(saleType);
-  const win = window.open("", "_blank", a4 ? "width=900,height=700" : "width=1,height=1,left=-1000,top=-1000");
-  if (!win) {
-    showWarning("Allow popups to enable receipt printing.", "Print Blocked");
-    return;
-  }
 
   const css = a4
     ? `@page { size: A4 portrait; margin: 15mm; }
@@ -191,22 +189,16 @@ function printReceiptText(receiptText: string, title: string, saleType: string) 
        pre { font-family: "Courier New", monospace; font-size: 12px; line-height: 1.25;
              white-space: pre-wrap; margin: 0; }`;
 
-  win.document.write(
-    `<html><head><title>${title}</title><style>${css}</style></head><body><pre>${receiptText}</pre></body></html>`
-  );
-  win.document.close();
+  const esc = (s: string) =>
+    String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-  setTimeout(() => {
-    try {
-      win.focus();
-      win.print();
-    } catch (err) {
-      console.error("Print failed:", err);
-    } finally {
-      setTimeout(() => win.close(), 1000);
-    }
-  }, 300);
+  printHtml(
+    `<html><head><title>${esc(title)}</title><style>${css}</style></head><body><pre>${esc(receiptText)}</pre></body></html>`
+  );
 }
+
+
+ 
 function emptyPayment(): Payment {
   return { uid: uid(), sale_type: "Retail", method: "Cash", amount: "", reference: "", received_by: "" };
 }
@@ -234,14 +226,31 @@ export default function POS() {
   const [payments, setPayments] = useState<Payment[]>([emptyPayment()]);
 
     const [submitting, setSubmitting] = useState(false);
+
   const [error, setError] = useState("");
   // Receipt of the most recently completed sale, used by the Print button
 const [lastReceipt, setLastReceipt] = useState<{ text: string; orderNumber: string; saleType: string } | null>(null);  // Receipt history — now stored server-side (GET/POST via /sales/) instead
   // of localStorage, so it's shared across tills/devices.
-    const [receipts, setReceipts] = useState<SaleReceipt[]>(() => readSavedReceipts());
+   const [serverReceipts, setReceipts] = useState<SaleReceipt[]>(() => readSavedReceipts());
+  // Sales saved on this device that haven't reached the server yet
+  const queuedSales = useLiveQuery(() => db.outbox.toArray(), [], []);
+  const receipts: SaleReceipt[] = useMemo(() => [
+    ...(queuedSales || []).map((s: any) => ({
+      id: s.client_uuid,
+      order_number: s.payload.local_order_number || "OFFLINE",
+      customer_name: s.payload.local_customer_name || "Walk-in Customer",
+      sale_type: s.payload.sale_type,
+      grand_total: s.payload.local_total || 0,
+      created_at: s.created_at,
+      receipt_text: s.payload.receipt_text || "",
+      status: s.status === "failed" ? "Failed" : "Pending sync",
+    })),
+    ...serverReceipts,
+  ], [queuedSales, serverReceipts]);
   const [loadingReceipts, setLoadingReceipts] = useState(true);
   const [receiptSearch, setReceiptSearch] = useState("");
   const [panelView, setPanelView] = useState<"receipts" | "today">("receipts");
+  const submittingRef = useRef(false);
   // Branch users are locked to their own branch; Head Office defaults to HQ and can switch.
   useEffect(() => {
     if (loadingAccess) return;
@@ -255,6 +264,7 @@ const [lastReceipt, setLastReceipt] = useState<{ text: string; orderNumber: stri
       const res = await API.get("sales/receipts/", { params: { branch: branchId, page_size: 300 } });
       const raw: SaleReceipt[] = res.data?.results || res.data?.data || (Array.isArray(res.data) ? res.data : []);
       setReceipts(raw);
+       writeSavedReceipts(raw);
     } catch (err) {
       console.error("Error loading saved receipts:", err);
     } finally {
@@ -281,39 +291,66 @@ const [lastReceipt, setLastReceipt] = useState<{ text: string; orderNumber: stri
   const saleType = payments[0]?.sale_type ?? "Retail";
   const customerRequired = saleType === "Wholesale" || saleType === "Credit";
 
-  const loadLookups = useCallback(async (silent = false) => {
+   const loadLookups = useCallback(async (silent = false) => {
     if (!silent) setLoadingLookups(true);
+    const list = (r: any) => r.data?.results || r.data?.data || (Array.isArray(r.data) ? r.data : []);
     try {
-                 const [custRes, prodRes, userRes] = await Promise.all([
+      const [custRes, prodRes, userRes] = await Promise.all([
         API.get("customers/"),
         API.get("products/"),
         API.get("users/"),
       ]);
-      setCustomers(custRes.data?.results || custRes.data?.data || (Array.isArray(custRes.data) ? custRes.data : []));
-      setProducts(prodRes.data?.results || prodRes.data?.data || (Array.isArray(prodRes.data) ? prodRes.data : []));
-      const allUsers = userRes.data?.results || userRes.data?.data || (Array.isArray(userRes.data) ? userRes.data : []);
+      const cust = list(custRes), prod = list(prodRes), allUsers = list(userRes);
+      setCustomers(cust);
+      setProducts(prod);
       setSalesClerks(allUsers.filter(isSalesClerk));
-    } catch (err) {
+      // keep a copy on this device for offline use
+      db.customers.bulkPut(cust).catch(() => {});
+      db.products.bulkPut(prod).catch(() => {});
+      db.users.bulkPut(allUsers).catch(() => {});
+    } catch (err: any) {
       console.error("Error loading sale lookups:", err);
-     } finally {
+      if (!err.response) {   // no connection: use the copy saved on this device
+        const [c, p, u] = await Promise.all([db.customers.toArray(), db.products.toArray(), db.users.toArray()]);
+        setCustomers(c);
+        setProducts(p);
+        setSalesClerks(u.filter(isSalesClerk));
+      }
+    } finally {
       if (!silent) setLoadingLookups(false);
     }
   }, []);
-
   useEffect(() => { loadLookups(); }, [loadLookups]);
-    const loadBranchStock = useCallback(async () => {
+     const loadBranchStock = useCallback(async () => {
     if (!branchId) { setBranchStock({}); return; }
+    const toMap = (rows: any[]) => {
+      const map: Record<number, any> = {};
+      rows.forEach(r => { map[r.product] = r; });
+      return map;
+    };
+
+    // Sales waiting to sync haven't reached the server yet, so take them off the server's numbers
+    const pending = await db.outbox.where("status").equals("pending").toArray();
+    const waiting: Record<number, number> = {};
+    pending.filter(s => s.payload.branch === branchId).forEach(s =>
+      (s.payload.items || []).forEach((l: any) => {
+        waiting[l.product] = (waiting[l.product] || 0) + Number(l.quantity);
+      }));
+
     try {
       const res = await API.get("branch-stocks/", { params: { branch: branchId, page_size: 5000 } });
       const rows: any[] = res.data?.results || (Array.isArray(res.data) ? res.data : []);
-      const map: Record<number, any> = {};
-      rows.forEach(r => { map[r.product] = r; });
-      setBranchStock(map);
-    } catch (err) {
-      console.error("Error loading branch stock:", err);
+      const adjusted = rows.map(r => ({ ...r, stock_quantity: r.stock_quantity - (waiting[r.product] || 0) }));
+      setBranchStock(toMap(adjusted));
+      db.branchStock.bulkPut(adjusted).catch(() => {});
+    } catch (err: any) {
+      if (!err.response) {
+        setBranchStock(toMap(await db.branchStock.where("branch").equals(branchId).toArray()));
+      } else {
+        console.error("Error loading branch stock:", err);
+      }
     }
   }, [branchId]);
-
   // New branch = new stock and prices, so start with a clean cart
   useEffect(() => {
     loadBranchStock();
@@ -483,6 +520,7 @@ unit_price: saleType === "Wholesale" ? i.wholesale_price : i.retail_price,
       printReceiptText(lastReceipt.text, `Receipt ${lastReceipt.orderNumber}`, lastReceipt.saleType);
   }
   async function handleSubmit() {
+     if (submittingRef.current) return;
     setError("");
     if (!branchId) {
       showWarning("Select a branch for this sale before checking out.", "No Branch Selected");
@@ -491,6 +529,14 @@ unit_price: saleType === "Wholesale" ? i.wholesale_price : i.retail_price,
    const badQty = items.find(i => !Number(i.quantity) || Number(i.quantity) < 1);
     if (badQty) {
       showWarning(`Enter a quantity for "${badQty.product_name}".`, "Quantity Required");
+      return;
+    }
+
+        const noClerk = payments.find(
+      (p, idx) => !p.received_by && (idx === 0 || parseFloat(p.amount) > 0)
+    );
+    if (noClerk) {
+      showWarning("Select the sales clerk before completing the sale.", "Sales Clerk Required");
       return;
     }
 const isCredit = saleType === "Credit";
@@ -531,8 +577,9 @@ if (!isCredit && !isWholesale && amountPaid < grandTotal - 0.005) {
       balance,
        pending: isPending,
     });
-
+const clientUuid = crypto.randomUUID();
     const payload = {
+      client_uuid: clientUuid,
       branch: branchId,
        sale_type: saleType,
        status: isPending ? "Pending" : "Completed",
@@ -554,9 +601,10 @@ if (!isCredit && !isWholesale && amountPaid < grandTotal - 0.005) {
       receipt_text: "",
     };
 
-    setSubmitting(true);
+    submittingRef.current = true;
+setSubmitting(true);
     try {
-      const res = await API.post("sales/", payload);
+            const res = await API.post("sales/", payload, { timeout: 15000 });
       const saleId = res.data?.id ?? res.data?.data?.id ?? null;
       const orderNumber = res.data?.order_number || "-";
       const receiptText = isCredit ? "" : draftReceiptText(orderNumber);
@@ -594,6 +642,31 @@ await showSuccess(
 );
       resetSaleForm();
     } catch (err: any) {
+        if (!err.response) {
+        try {
+          const orderNumber = "OFF-" + clientUuid.slice(0, 6).toUpperCase();
+          const receiptText = isCredit ? "" : draftReceiptText(orderNumber);
+          await saveSale({
+            ...payload,
+            receipt_text: receiptText,
+            local_order_number: orderNumber,
+            local_customer_name: customerName,
+            local_total: grandTotal,
+          });
+          setLastReceipt(isCredit ? null : { text: receiptText, orderNumber, saleType });
+          await showSuccess(
+            `No connection. Sale ${orderNumber} was saved on this device and will upload automatically.`,
+            "Saved Offline",
+            2200
+          );
+          resetSaleForm();
+        } catch (saveErr) {
+          console.error("Could not save sale offline:", saveErr);
+          showError("Could not save the sale on this device.", "Save Failed");
+        }
+        return;
+      }
+
       const data = err.response?.data;
       let msg = data?.message || data?.detail;
       if (!msg && Array.isArray(data)) msg = data[0];
@@ -606,6 +679,7 @@ await showSuccess(
       setError(msg);
       showError(msg, "Checkout Failed");
     } finally {
+        submittingRef.current = false;
       setSubmitting(false);
     }
   }
@@ -633,7 +707,7 @@ await showSuccess(
           {/* ── Top bar: title, Billing To, Receipts ─────────────────── */}
           <div className="card shadow-none border mb-2 flex-shrink-0">
             <div className="card-body py-2 px-3 d-flex align-items-center justify-content-between gap-3 flex-wrap">
-              <h4 className="fw-semibold mb-0">New POS Sale</h4>
+              <h4 className="fw-semibold mb-0">New Sale</h4>
 
               <div className="position-relative flex-grow-1" style={{ maxWidth: 380 }}>
                 <div className="d-flex align-items-center gap-2">
@@ -934,9 +1008,10 @@ await showSuccess(
 
                       <div className="row g-2 align-items-end">
                         <div className={idx === 0 ? "col-8" : "col-10"}>
-                          <label className="form-label fs-12 mb-1">Cashier Name</label>
-                          <select className="form-select form-select-sm fs-13" value={p.received_by}
-                            onChange={e => updatePayment(p.uid, { received_by: e.target.value })}>
+                          <label className="form-label fs-12 mb-1">Sale Clerk</label>
+                          <select className={`form-select form-select-sm fs-13 ${!p.received_by && idx === 0 ? "border-danger" : ""}`}
+  value={p.received_by}
+  onChange={e => updatePayment(p.uid, { received_by: e.target.value })}>
                             <option value="">Select sales clerk…</option>
                             {salesClerks.map(u => (
                               <option key={u.id} value={u.id}>

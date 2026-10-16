@@ -20,7 +20,6 @@ function buildCatalog(): Item[] {
   });
   // The two dashboards share a label in the sidebar; make them distinguishable here.
   return out.map(i =>
-    i.key === "dashboard" ? { ...i, label: "Dashboard (sales view)" } :
     i.key === "admin_dashboard" ? { ...i, label: "Dashboard (admin view)" } : i
   );
 }

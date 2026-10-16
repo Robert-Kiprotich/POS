@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import * as XLSX from "xlsx";
 import API from "../../services/api";
 import logo from "../../assets/img/Logo.svg";
+import { printHtml } from "../../utils/printHtml";
 
 function fmtDate(iso?: string) {
   if (!iso) return "";
@@ -22,7 +23,7 @@ const STATUSES = [
 ];
 const INVOICE_TYPES = [
  
-  { value: "credit",   label: "Credit Invoice" },
+  { value: "credit",   label: "Sales Invoice" },
 ];
 
 type ExtraField = { key: string; label: string; type?: "text" | "date" | "number" | "textarea"; required?: boolean };
@@ -97,7 +98,7 @@ interface InvForm {
 }
 
 const emptyForm: InvForm = {
-  invoice_type: "supply",
+  invoice_type: "credit",
   sale: "",
   supplier: "",
   supply: "",
@@ -121,7 +122,10 @@ function exportCSV(rows: any[]) {
   const headers = COLUMNS.map(c => c.label);
   const lines = [
     headers.join(","),
-    ...rows.map(r => COLUMNS.map(c => `"${String(r[c.key] ?? "").replace(/"/g, '""')}"`).join(",")),
+    
+    ...rows.map(r => COLUMNS.map(c => `"${String(
+  (c.key === "invoice_type_display" ? typeLabel(r) : r[c.key]) ?? ""
+).replace(/"/g, '""')}"`).join(",")),
   ];
   const blob = new Blob([lines.join("\n")], { type: "text/csv" });
   const a = document.createElement("a");
@@ -132,13 +136,16 @@ function exportCSV(rows: any[]) {
 
 function exportExcel(rows: any[]) {
   const headers = COLUMNS.map(c => c.label);
-  const data = [headers, ...rows.map(r => COLUMNS.map(c => String(r[c.key] ?? "")))];
+ const data = [headers, ...rows.map(r => COLUMNS.map(c =>
+  String((c.key === "invoice_type_display" ? typeLabel(r) : r[c.key]) ?? "")))];
   const ws = XLSX.utils.aoa_to_sheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "SalesInvoices");
   XLSX.writeFile(wb, `sales_invoices_${new Date().toISOString().slice(0, 10)}.xlsx`);
-}
 
+}
+const typeLabel = (r: any) =>
+  r.invoice_type === "purchase" ? "Purchase Invoice" : "Sales Invoice";
 const statusBadge = (s: string) => {
   const map: Record<string, string> = {
     draft:     "bg-secondary-transparent text-secondary",
@@ -216,6 +223,13 @@ const INVOICE_CSS = `
   .sign div { flex: 1; border-top: 1px solid #111; padding-top: 4px; text-align: center; font-size: 11px; color: #4b5563; }
   .foot { margin-top: 30px; text-align: center; color: #9ca3af; font-size: 10px;
           border-top: 1px solid #e5e7eb; padding-top: 10px; }
+            .unpaid { margin-top: 22px; break-inside: avoid; page-break-inside: avoid; }
+  .unpaid h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: #6b7280; }
+  .unpaid table th { background: #f3f4f6 !important; color: #374151 !important; }
+  .unpaid tr.cur td { font-weight: 700; background: #fef2f2; }
+  .unpaid .allbal { display: flex; justify-content: space-between; margin-top: 8px; padding: 9px 10px;
+                    background: ${ACCENT} !important; color: #fff !important; font-weight: 700;
+                    font-size: 13px; border-radius: 4px; }
 `;
 
 function buildInvoiceHtml(inv: any) {
@@ -242,9 +256,27 @@ function buildInvoiceHtml(inv: any) {
     </tr>`).join("");
   const logoSrc = BUSINESS.logo.startsWith("data:") ? BUSINESS.logo : window.location.origin + BUSINESS.logo;
   const partyLabel = isPurchase ? "Supplier" : "Bill To";
-  const title = inv.invoice_type === "credit" ? "CREDIT INVOICE" : "INVOICE";
-  // Unpaid balance from this supplier's earlier bills (purchase invoices only)
+const title = isPurchase ? "INVOICE" : "SALES INVOICE";  // Unpaid balance from this supplier's earlier bills (purchase invoices only)
   const prevBal = isPurchase ? Number(inv.previous_balance || 0) : 0;
+    const prevInvs: any[] = !isPurchase ? (inv.previous_invoices || []) : [];
+  const prevInvTotal = prevInvs.reduce((s, x) => s + Number(x.total_amount || 0), 0);
+  const prevInvBal = prevInvs.reduce((s, x) => s + Number(x.balance_due || 0), 0);
+  const allTotal = prevInvTotal + Number(inv.total_amount || 0);
+  const allBalance = prevInvBal + Number(inv.balance_due || 0);
+
+  const unpaidHtml = prevInvs.length ? `
+  <div class="unpaid">
+    <h3>Unpaid invoices</h3>
+    <table>
+      <thead><tr><th>Invoice #</th><th class="r">Total</th><th class="r">Balance</th></tr></thead>
+      <tbody>
+        ${prevInvs.map(x => `<tr><td>${esc(x.invoice_number)}</td><td class="r">${amt(x.total_amount)}</td><td class="r">${amt(x.balance_due)}</td></tr>`).join("")}
+        <tr class="cur"><td>${esc(docNo)} (this invoice)</td><td class="r">${amt(inv.total_amount)}</td><td class="r">${amt(inv.balance_due)}</td></tr>
+      </tbody>
+      <tfoot><tr><td><strong>Totals</strong></td><td class="r"><strong>${amt(allTotal)}</strong></td><td class="r"><strong>${amt(allBalance)}</strong></td></tr></tfoot>
+    </table>
+    <div class="allbal"><span>Total balance of all invoices</span><span>${amt(allBalance)}</span></div>
+  </div>` : "";
 
   const html = `
 <html><head><title>Invoice ${esc(docNo)}</title>
@@ -292,10 +324,12 @@ function buildInvoiceHtml(inv: any) {
     <div class="grand"><span>Total</span><span>${amt(inv.total_amount)}</span></div>
     <div><span>Paid</span><span>${amt(inv.amount_paid)}</span></div>
     <div class="due"><span>Balance due</span><span>${amt(inv.balance_due)}</span></div>
+
     ${prevBal > 0 ? `
     <div><span>Previous balance (unpaid)</span><span>${amt(prevBal)}</span></div>
     <div class="grand"><span>Total outstanding</span><span>${amt(Number(inv.balance_due || 0) + prevBal)}</span></div>` : ""}
   </div>
+  ${unpaidHtml}
 
   ${inv.notes ? `<div class="extra"><strong>Notes</strong>\n${esc(inv.notes)}</div>` : ""}
   ${inv.terms ? `<div class="extra"><strong>Terms</strong>\n${esc(inv.terms)}</div>` : ""}
@@ -307,20 +341,8 @@ function buildInvoiceHtml(inv: any) {
 }
 
 function printInvoice(inv: any) {
-  const win = window.open("", "_blank", "width=900,height=1000");
-  if (!win) { alert("Allow popups to print the invoice."); return; }
-
-  const { html } = buildInvoiceHtml(inv);
-
-  win.document.write(html);
-  win.document.close();
-  setTimeout(() => {
-    try { win.focus(); win.print(); }
-    catch (err) { console.error("Print failed:", err); }
-    finally { setTimeout(() => win.close(), 500); }
-  }, 300);
+  printHtml(buildInvoiceHtml(inv).html);
 }
-
 async function downloadInvoice(inv: any) {
   const { html, docNo } = buildInvoiceHtml(inv);
 
@@ -459,7 +481,10 @@ export default function SalesInvoicesList() {
   useEffect(() => {
     let list = items;
     if (statusFilter !== "all") list = list.filter(r => r.status === statusFilter);
-    if (typeFilter !== "all") list = list.filter(r => r.invoice_type === typeFilter);
+    if (typeFilter !== "all") {
+  list = list.filter(r =>
+    typeFilter === "credit" ? r.invoice_type !== "purchase" : r.invoice_type === typeFilter);
+}
     if (supplierFilter !== "all") list = list.filter(r => String(r.supplier ?? "") === supplierFilter);
 
     if (search.trim()) {
@@ -495,7 +520,7 @@ export default function SalesInvoicesList() {
     setMode("edit");
     setSelected(item);
     setForm({
-      invoice_type: item.invoice_type || "supply",
+      invoice_type: item.invoice_type || "credit",
       sale: String(item.sale ?? ""),
       supplier: String(item.supplier ?? ""),
       supply: "",
@@ -822,7 +847,7 @@ const addSupplyItem = (key: string) => {
                             r.invoice_type === "purchase" ? "badge bg-info-transparent text-info" :
                                                             "badge bg-primary-transparent text-primary"
                           }>
-                            {r.invoice_type_display || "Supply Invoice"}
+                            {typeLabel(r)}
                           </span>
                         </td>
                         <td className="text-muted text-nowrap">{fmtDate(r.issue_date)}</td>
@@ -844,6 +869,10 @@ const addSupplyItem = (key: string) => {
                                 <i className="ti ti-send text-info" />
                               </button>
                             )}
+                            <button className="btn btn-sm btn-icon btn-light" title="View"
+  onClick={() => { setMode("view"); setSelected(r); setError(""); openOffcanvas(); }}>
+  <i className="ti ti-eye text-info" />
+</button>
                             {r.status !== "paid" && r.status !== "cancelled" && (
                               <button className="btn btn-sm btn-icon btn-light" title="Mark Paid" onClick={() => handleMarkPaid(r.id)}>
                                 <i className="ti ti-circle-check text-success" />
@@ -1155,7 +1184,7 @@ const addSupplyItem = (key: string) => {
                 )}
 
               </div>
-
+    
               <SectionTitle icon="ti-notes" title="Notes & Terms" />
               <Field label="Notes">
                 <textarea rows={2} className="form-control fs-13"
@@ -1235,7 +1264,7 @@ function InvoiceView({
     <div className="d-flex flex-column gap-3 fs-13">
       <SectionTitle icon="ti-file-invoice" title="Invoice Information" />
       <div className="row g-3">
-        <div className="col-12"><ViewRow label="INVOICE TYPE" value={item.invoice_type_display} /></div>
+       <ViewRow label="INVOICE TYPE" value={typeLabel(item)} />
         <div className="col-6"><ViewRow label="INVOICE #" value={item.invoice_number} /></div>
         <div className="col-6">
           <ViewRow label="STATUS" value={<span className={`badge ${statusBadge(item.status)}`}>{item.status_display || item.status}</span>} />
@@ -1286,7 +1315,28 @@ function InvoiceView({
           </table>
         </div>
       )}
-
+              {(item.previous_invoices || []).length > 0 && (
+  <>
+    <SectionTitle icon="ti-alert-triangle" title="Unpaid invoices" />
+    <table className="table table-sm fs-12 mb-0">
+      <thead className="table-light"><tr><th>Invoice #</th><th className="text-end">Total</th><th className="text-end">Balance</th></tr></thead>
+      <tbody>
+        {item.previous_invoices.map((x: any) => (
+          <tr key={x.invoice_number}>
+            <td>{x.invoice_number}</td>
+            <td className="text-end">{fmtMoney(x.total_amount)}</td>
+            <td className="text-end text-danger">{fmtMoney(x.balance_due)}</td>
+          </tr>
+        ))}
+        <tr className="fw-semibold">
+          <td>{item.invoice_number} (this invoice)</td>
+          <td className="text-end">{fmtMoney(item.total_amount)}</td>
+          <td className="text-end text-danger">{fmtMoney(item.balance_due)}</td>
+        </tr>
+      </tbody>
+    </table>
+  </>
+)}
       <SectionTitle icon="ti-user" title={tcfg?.partyTitle || "Billed To"} />
       <div className="row g-3">
         <div className="col-6"><ViewRow label="NAME" value={item.billed_to_name} /></div>

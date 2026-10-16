@@ -49,7 +49,22 @@ export default function SaleDetailOffcanvas({ saleId, onClose, onChanged }: Prop
   const [payError, setPayError]           = useState("");
 
   const open = saleId != null;
+  const [users, setUsers] = useState<any[]>([]);
 
+  useEffect(() => {
+    API.get("users/")
+      .then(r => {
+        const list = r.data?.results || (Array.isArray(r.data) ? r.data : []);
+        setUsers(list.filter((u: any) => u.is_active));
+      })
+      .catch(err => console.error("Error loading users:", err));
+    API.get("users/me/")
+      .then(r => setPayReceivedBy(String(r.data?.id ?? "")))
+      .catch(() => {});
+  }, []);
+
+  const userName = (u: any) =>
+    `${u.firstname || ""} ${u.lastname || ""}`.trim() || u.username;
   const load = useCallback((showSpinner = true) => {
     if (saleId == null) return;
     if (showSpinner) setLoading(true);
@@ -92,13 +107,14 @@ export default function SaleDetailOffcanvas({ saleId, onClose, onChanged }: Prop
     if (!amt || amt <= 0) { setPayError("Enter a valid payment amount."); return; }
     setSavingPayment(true);
     try {
-      await API.post(`sales/${sale.id}/add_payment/`, {
-  method: payMethod,
-  amount: amt,
-  reference: payReference,
-});
+            await API.post(`sales/${sale.id}/add_payment/`, {
+        method: payMethod,
+        amount: amt,
+        reference: payReference,
+        received_by: payReceivedBy ? Number(payReceivedBy) : undefined,
+      });
       setShowPaymentForm(false);
-      setPayAmount(""); setPayReference(""); setPayReceivedBy(""); setPayMethod("cash");
+      setPayAmount(""); setPayReference(""); setPayMethod("cash");
       load(false);
       onChanged?.();
     } catch (err: any) {
@@ -338,7 +354,13 @@ export default function SaleDetailOffcanvas({ saleId, onClose, onChanged }: Prop
                       </div>
                       <div className="col-sm-6">
                         <label className="form-label fs-12 mb-1">Received by</label>
-                        <input type="text" className="form-control form-control-sm fs-13" value={payReceivedBy} onChange={e => setPayReceivedBy(e.target.value)} />
+                        <select className="form-select form-select-sm fs-13" value={payReceivedBy}
+  onChange={e => setPayReceivedBy(e.target.value)}>
+  <option value="">— Select user —</option>
+  {users.map((u: any) => (
+    <option key={u.id} value={u.id}>{userName(u)}</option>
+  ))}
+</select>
                       </div>
                       <div className="col-12 d-flex gap-2 justify-content-end">
                         <button className="btn btn-sm btn-outline-secondary" onClick={() => setShowPaymentForm(false)}>Cancel</button>
@@ -375,7 +397,9 @@ export default function SaleDetailOffcanvas({ saleId, onClose, onChanged }: Prop
                               </td>
                               <td className="fw-semibold text-success">{money(p.amount)}</td>
                               <td className="text-muted">{p.reference || "—"}</td>
-                              <td className="text-muted">{p.received_by ?? "—"}</td>
+                              <td className="text-muted">
+  {(() => { const u = users.find((x: any) => x.id === p.received_by); return u ? userName(u) : "—"; })()}
+</td>
                               <td className="text-muted pe-3 text-nowrap">{fmtDate(p.paid_at)}</td>
                             </tr>
                           ))}

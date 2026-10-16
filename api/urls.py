@@ -40,6 +40,7 @@ urlpatterns = [
      path("reports/options/", report_options, name="report-options"),
   path("reports/", run_report, name="run-report"),
     path('', include(router.urls)),
+    path("health/", health),
 ]
 
 

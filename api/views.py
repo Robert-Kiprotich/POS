@@ -9,7 +9,7 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes,authentication_classes
 from .utils import get_head_office_branch
 from .models import *
 from .serializers import *
@@ -23,9 +23,19 @@ from rest_framework.exceptions import PermissionDenied, ValidationError as DRFVa
 from .branch_scope import (scope_by_branch, check_branch_access, visible_branch_id,
                            sees_all_branches, user_branch_id)
 from .utils import get_head_office_branch
+import uuid
+from django.db import IntegrityError
+from django.utils.dateparse import parse_datetime
 
 
-
+def _is_sales_clerk(user):
+    """True for cashiers / sales clerks. Admins and managers are never restricted."""
+    if IsAdminUserCustom._check_admin(user):
+        return False
+    name = (getattr(getattr(user, "role", None), "role_name", "") or "").lower()
+    if "manager" in name:
+        return False
+    return "sales clerk" in name or "cashier" in name
 class BranchViewSet(viewsets.ModelViewSet):
     queryset = Branch.objects.all()
     serializer_class = BranchSerializer
@@ -100,6 +110,8 @@ class BranchStockViewSet(viewsets.ModelViewSet):
             qs = qs.filter(product_id=product_id)
         if low_stock and low_stock.lower() in ("1", "true", "yes"):
             qs = qs.filter(stock_quantity__lte=F("reorder_level"))
+        if self.request.query_params.get("negative", "").lower() in ("1", "true", "yes"):
+            qs = qs.filter(stock_quantity__lt=0)
         return qs
     def perform_create(self, serializer):
         check_branch_access(self.request.user, serializer.validated_data["branch"].pk)
@@ -237,6 +249,26 @@ class SaleViewSet(viewsets.ModelViewSet):
             return SaleCreateSerializer
         return SaleSerializer
     @staticmethod
+    def _sync_invoice(sale):
+        """Keep the invoice(s) linked to this sale in step with its payments."""
+        paid = sale.amount_paid or Decimal("0.00")
+        total = sale.total_amount or Decimal("0.00")
+        balance = max(total - paid, Decimal("0.00"))
+
+        for inv in SalesInvoice.objects.filter(sale=sale).exclude(
+            status=SalesInvoice.Status.CANCELLED
+        ):
+            inv.total_amount = total
+            inv.amount_paid = paid
+            inv.balance_due = balance
+            if total > 0 and paid >= total:
+                inv.status = SalesInvoice.Status.PAID
+            elif paid > 0:
+                inv.status = getattr(SalesInvoice.Status, "PARTIAL", "partial")
+            inv.save(update_fields=["total_amount", "amount_paid", "balance_due",
+                                    "status", "updated_at"])
+
+    @staticmethod
     def _sync_payment_status(sale):
         sale.refresh_from_db()
         paid = sale.payments.aggregate(
@@ -244,20 +276,43 @@ class SaleViewSet(viewsets.ModelViewSet):
         )["t"]
         sale.amount_paid = paid
         if sale.status != Sale.Status.CANCELLED:
-            # Any payment recorded at the till = completed sale.
-            # The unpaid remainder is tracked as the balance (total - paid).
             fully_paid = paid > 0 and paid >= sale.total_amount
-            sale.status = Sale.Status.COMPLETED if fully_paid else Sale.Status.PENDING 
+            sale.status = Sale.Status.COMPLETED if fully_paid else Sale.Status.PENDING
         sale.save(update_fields=["amount_paid", "status", "updated_at"])
+        SaleViewSet._sync_invoice(sale)      # <- new
         return sale
-
     def create(self, request, *args, **kwargs):
+        ctx = self.get_serializer_context()
+
+        # ---- offline sync: duplicate protection ----
+        client_uuid = None
+        raw_uuid = request.data.get("client_uuid")
+        if raw_uuid:
+            try:
+                client_uuid = uuid.UUID(str(raw_uuid))
+            except ValueError:
+                return Response({"error": "client_uuid is not a valid UUID."},
+                                status=status.HTTP_400_BAD_REQUEST)
+            existing = Sale.objects.filter(client_uuid=client_uuid).first()
+            if existing:   # already saved: return it, don't create a second sale
+                return Response(SaleSerializer(existing, context=ctx).data, status=status.HTTP_200_OK)
+
+        # ---- offline sync: real time of sale ----
+        sold_at = None
+        raw_time = request.data.get("sold_at")
+        if raw_time:
+            sold_at = parse_datetime(str(raw_time))
+            if sold_at:
+                if timezone.is_naive(sold_at):
+                    sold_at = timezone.make_aware(sold_at)
+                if sold_at > timezone.now():          # a wrong device clock must not post-date sales
+                    sold_at = timezone.now()
+
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         check_branch_access(request.user, serializer.validated_data["branch"].pk)
         if serializer.validated_data.get("sale_type", "Retail") == "Retail":
-            from django.db.models import Sum  # already imported at top; remove if duplicate
             paid_in = sum(
                 (Decimal(str(p.get("amount") or 0)) for p in request.data.get("payments", [])),
                 Decimal("0.00"),
@@ -271,36 +326,53 @@ class SaleViewSet(viewsets.ModelViewSet):
                 raise DRFValidationError(
                     {"payments": "Retail sales must be paid in full. Use Wholesale or Credit for part payment."}
                 )
-        with transaction.atomic():
-            sale = serializer.save()
-            sale_type = request.data.get("sale_type")
-            if sale_type in ("Retail", "Wholesale", "Credit"):
-                sale.sale_type = sale_type
-                sale.save(update_fields=["sale_type"])
 
-            # Safety net: if SaleCreateSerializer didn't save the payments
-            # (the likely reason it still shows pending), create them here.
-            if not sale.payments.exists():
-                for p in request.data.get("payments", []):
-                    amount = Decimal(str(p.get("amount") or 0))
-                    if amount > 0:
-                        Payment.objects.create(
-                            sale=sale,
-                            method=p.get("method"),
-                            amount=amount,
-                            reference=p.get("reference", ""),
-                            received_by_id=p.get("received_by") or request.user.id,
-                        )
+        try:
+            with transaction.atomic():
+                sale = serializer.save()
+                sale_type = request.data.get("sale_type")
+                if sale_type in ("Retail", "Wholesale", "Credit"):
+                    sale.sale_type = sale_type
+                    sale.save(update_fields=["sale_type"])
 
-            sale = self._sync_payment_status(sale)
+                if not sale.payments.exists():
+                    for p in request.data.get("payments", []):
+                        amount = Decimal(str(p.get("amount") or 0))
+                        if amount > 0:
+                            Payment.objects.create(
+                                sale=sale,
+                                method=p.get("method"),
+                                amount=amount,
+                                reference=p.get("reference", ""),
+                                received_by_id=p.get("received_by") or request.user.id,
+                            )
 
-        return Response(
-            SaleSerializer(sale, context=self.get_serializer_context()).data,
-            status=status.HTTP_201_CREATED,
-        )
+                # Stamp offline metadata. update() bypasses auto_now_add, so reports
+                # (which use created_at / paid_at) show the real sale time, not the sync time.
+                if client_uuid or sold_at:
+                    fields = {"received_at": timezone.now()}
+                    if client_uuid:
+                        fields["client_uuid"] = client_uuid
+                    if sold_at:
+                        fields["created_at"] = sold_at
+                        Payment.objects.filter(sale=sale).update(paid_at=sold_at)
+                        StockMovement.objects.filter(note=f"Sold via {sale.order_number}").update(created_at=sold_at)
+                    Sale.objects.filter(pk=sale.pk).update(**fields)
 
+                sale = self._sync_payment_status(sale)
+        except IntegrityError:
+            # two identical requests raced; the unique client_uuid rejected the second one
+            if client_uuid:
+                existing = Sale.objects.filter(client_uuid=client_uuid).first()
+                if existing:
+                    return Response(SaleSerializer(existing, context=ctx).data, status=status.HTTP_200_OK)
+            raise
+
+        return Response(SaleSerializer(sale, context=ctx).data, status=status.HTTP_201_CREATED)
     def get_queryset(self):
         qs = scope_by_branch(super().get_queryset(), self.request, "branch_id")
+        if _is_sales_clerk(self.request.user):
+            qs = qs.filter(cashier=self.request.user)   # clerks only see their own sales
         status_param = self.request.query_params.get("status")
         customer_id = self.request.query_params.get("customer")
         date_from = self.request.query_params.get("date_from")
@@ -421,6 +493,8 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = scope_by_branch(super().get_queryset(), self.request, "sale__branch_id")
+        if _is_sales_clerk(self.request.user):
+            qs = qs.filter(sale__cashier=self.request.user)
         sale_id = self.request.query_params.get("sale")
         if sale_id:
             qs = qs.filter(sale_id=sale_id)
@@ -842,6 +916,8 @@ class SalesInvoiceViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = scope_by_branch(super().get_queryset(), self.request, "sale__branch_id")
+        if _is_sales_clerk(self.request.user):
+            qs = qs.filter(sale__cashier=self.request.user)
         status_f = self.request.query_params.get("status")
         sale_f   = self.request.query_params.get("sale")
         date_from = self.request.query_params.get("date_from")
@@ -927,7 +1003,7 @@ class SalesInvoiceViewSet(viewsets.ModelViewSet):
 
         data = {
             "sale": sale.id,
-            "invoice_type": request.data.get("invoice_type")
+            "invoice_type": request.data.get("invoice_type") or "credit"
         or ("credit" if getattr(sale, "sale_type", "") == "Credit" else "supply"),
             "issue_date": request.data.get("issue_date") or timezone.localdate().isoformat(),
             "due_date": request.data.get("due_date") or None,
@@ -2730,7 +2806,8 @@ def _r_invoices(p):
             overdue_amt += _f(inv.balance_due)
         data.append({
             "number": inv.invoice_number, "issue": _iso(inv.issue_date), "due": _iso(inv.due_date),
-            "billed_to": inv.billed_to_name or "—", "type": inv.get_invoice_type_display(),
+            "billed_to": inv.billed_to_name or "—",
+"type": "Purchase Invoice" if inv.invoice_type == "purchase" else "Sales Invoice",
             "status": inv.get_status_display(), "total": _f(inv.total_amount), "paid": _f(inv.amount_paid),
             "balance": _f(inv.balance_due), "late": late,
         })
@@ -3754,3 +3831,8 @@ class SupplyViewSet(viewsets.ModelViewSet):
                   f"Generated invoice {bill.invoice_number} for supply {supply.reference}")
         return Response(SalesInvoiceSerializer(bill, context=ctx).data, status=status.HTTP_201_CREATED)
 
+@api_view(["GET"])
+@authentication_classes([])     # no auth, so an expired token can't make it look "offline"
+@permission_classes([])
+def health(request):
+    return Response({"ok": True})

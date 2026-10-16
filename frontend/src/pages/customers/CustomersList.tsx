@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import * as XLSX from "xlsx";
 import API from "../../services/api";
 import CustomerFormOffcanvas from "./customerModal";
+import { openStatement } from "../../../src/utils/invoiveTemplate";
 
 function fmtDate(iso: string) {
   if (!iso) return "";
@@ -247,6 +248,63 @@ function exportExcel(customers: any[]) {
   );
 }
 
+const norm = (v: any) => String(v || "").toLowerCase().trim();
+
+/* Every sale belonging to customers with the same name AND business name */
+function buildStatement(customer: any, allCustomers: any[]) {
+  const matches = allCustomers.filter(
+    (c) => norm(c.name) === norm(customer.name) && norm(c.business_name) === norm(customer.business_name)
+  );
+  const sales = matches
+    .flatMap((c) => getCustomerSales(c))
+    .sort((a: any, b: any) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+
+  const sum = (k: string) => sales.reduce((s: number, x: any) => s + Number(x[k] || 0), 0);
+  return {
+    name: customer.name || "",
+    business: customer.business_name || "",
+    phone: customer.phone || "",
+    email: customer.email || "",
+    sales,
+    totalAmount: sum("total_amount"),
+    totalPaid: sum("amount_paid"),
+    totalBalance: sum("balance_due"),
+  };
+}
+
+function previewStatement(customer: any, allCustomers: any[]) {
+  openStatement(buildStatement(customer, allCustomers), "preview");
+}
+
+function printStatement(customer: any, allCustomers: any[]) {
+  openStatement(buildStatement(customer, allCustomers), "print");
+}
+function downloadStatement(customer: any, allCustomers: any[]) {
+  const s = buildStatement(customer, allCustomers);
+  const aoa: any[][] = [
+    ["Customer Statement"],
+    ["Customer", s.name],
+    ["Business", s.business],
+    ["Phone", s.phone],
+    ["Email", s.email],
+    [],
+    ["Date", "Invoice", "Type", "Total", "Paid", "Balance"],
+    ...s.sales.map((x: any) => [
+      x.created_at ? fmtDate(x.created_at) : "",
+      x.order_number || "",
+      x.sale_type || "",
+      Number(x.total_amount || 0),
+      Number(x.amount_paid || 0),
+      Number(x.balance_due || 0),
+    ]),
+    [],
+    ["", "", "Totals", s.totalAmount, s.totalPaid, s.totalBalance],
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Statement");
+  const safe = (s.name || "customer").replace(/[^a-z0-9]+/gi, "_");
+  XLSX.writeFile(wb, `statement_${safe}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
 export default function CustomersList() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [filtered, setFiltered] = useState<any[]>([]);
@@ -732,17 +790,17 @@ export default function CustomersList() {
 
 
                           {/* PHONE */}
- <td className="text-nowrap">
+                          <td className="text-nowrap">
                             {customer.business_name || (
                               <span className="text-muted">—</span>
                             )}
                           </td>
-                                        {customer.phone || (
-                              <span className="text-muted">—</span>
-                            )}
+                                                               <td className="text-nowrap">
+                            {customer.phone || <span className="text-muted">—</span>}
                             {customer.alt_phone && (
                               <div className="text-muted fs-11">{customer.alt_phone}</div>
                             )}
+                          </td>
                             
 
                           {/* INVOICE */}
@@ -873,24 +931,39 @@ export default function CustomersList() {
 
 
                           {/* VIEW */}
-
-                          <td>
-
-                           <button
-    className="btn btn-sm btn-outline-primary py-1 px-2 fs-11"
+                        <td className="text-nowrap">
+  <button
+    className="btn btn-sm btn-outline-primary py-1 px-2 fs-11 me-1"
     onClick={() => {
-      setSelected({
-        ...row.customer,
-        selectedSale: row.sale,
-      });
+      setSelected({ ...row.customer, selectedSale: row.sale });
       setShowForm(true);
     }}
   >
-    <i className="ti ti-eye me-1" />
-    View
+    <i className="ti ti-eye me-1" />View
   </button>
-
-                          </td>
+  <button
+    className="btn btn-sm btn-outline-info py-1 px-2 fs-11 me-1"
+    title="Preview statement"
+    onClick={() => previewStatement(row.customer, customers)}
+  >
+    <i className="ti ti-file-search" />
+  </button>
+  <button
+    className="btn btn-sm btn-outline-success py-1 px-2 fs-11 me-1"
+    title="Download statement (Excel)"
+    onClick={() => downloadStatement(row.customer, customers)}
+  >
+    <i className="ti ti-download" />
+  </button>
+  <button
+    className="btn btn-sm btn-outline-secondary py-1 px-2 fs-11"
+    title="Print statement"
+    onClick={() => printStatement(row.customer, customers)}
+  >
+    <i className="ti ti-printer" />
+  </button>
+</td>
+                        
 
                         </tr>
                       );

@@ -8,9 +8,9 @@ import { all_routes } from "../../routes/all_routes";
 import API from "../../services/api";
 import posLogo from "../../../Logo.jpeg";
 // 1. Import CaseModal component
-import CaseModal from "../../pages/users/cashier/dashboard/dashboardcomponents/modals/modalCases"; // Adjust this import path depending on where modalCases.tsx sits relative to this dashboard
-import type { MessageItem } from "../../pages/users/cashier/dashboard/dashboardcomponents/Chat"; // Import definition types if needed
-
+import CaseModal from "../../pages/users/cashier/dashboard/dashboardcomponents/modals/modalCases"; 
+import type { MessageItem } from "../../pages/users/cashier/dashboard/dashboardcomponents/Chat"; 
+import OfflineStatusIcon from "../../offline/OfflineStatusIcon";
 
 
 interface UserProfile {
@@ -230,87 +230,15 @@ useEffect(() => {
               </Link>
             </div>
 
-            {/* Grid apps */}
-            <div className="header-item d-none d-sm-flex">
-              <div className="dropdown me-2">
-                <Link to="#" className="btn topbar-link topbar-teal-link" data-bs-toggle="dropdown">
-                  <i className="ti ti-layout-grid-add" />
-                </Link>
-                <div className="dropdown-menu dropdown-menu-end dropdown-menu-md p-2">
-                  <Link to={route.contactGrid} className="dropdown-item">
-                    <div className="d-flex align-items-center justify-content-between">
-                      <div>
-                        <span className="d-flex mb-1 fw-semibold text-dark">Contacts</span>
-                        <span className="fs-13">View All the Contacts</span>
-                      </div>
-                      <i className="ti ti-chevron-right-pipe text-dark" />
-                    </div>
-                  </Link>
-                  <Link to={route.pipeline} className="dropdown-item">
-                    <div className="d-flex align-items-center justify-content-between">
-                      <div>
-                        <span className="d-flex mb-1 fw-semibold text-dark">Pipeline</span>
-                        <span className="fs-13">View All the Pipeline</span>
-                      </div>
-                      <i className="ti ti-chevron-right-pipe text-dark" />
-                    </div>
-                  </Link>
-                  <Link to={route.activities} className="dropdown-item">
-                    <div className="d-flex align-items-center justify-content-between">
-                      <div>
-                        <span className="d-flex mb-1 fw-semibold text-dark">Activities</span>
-                        <span className="fs-13">Activities</span>
-                      </div>
-                      <i className="ti ti-chevron-right-pipe text-dark" />
-                    </div>
-                  </Link>
-                  <Link to={route.analytics} className="dropdown-item">
-                    <div className="d-flex align-items-center justify-content-between">
-                      <div>
-                        <span className="d-flex mb-1 fw-semibold text-dark">Analytics</span>
-                        <span className="fs-13">Analytics</span>
-                      </div>
-                      <i className="ti ti-chevron-right-pipe text-dark" />
-                    </div>
-                  </Link>
-                </div>
-              </div>
-            </div>
-
-            {/* Help */}
-            <div className="header-item d-none d-sm-flex">
-              <div className="dropdown me-2">
-                <Link to={route.faq} className="btn topbar-link topbar-indigo-link">
-                  <i className="ti ti-help-hexagon" />
-                </Link>
-              </div>
-            </div>
-
+        
             {/* Reports */}
-            <div className="header-item d-none d-sm-flex">
-              <div className="dropdown me-2">
-                <Link to={route.leadReports} className="btn topbar-link topbar-warning-link">
-                  <i className="ti ti-chart-pie" />
-                </Link>
-              </div>
+            <div className="header-item">
+              <OfflineStatusIcon />
             </div>
 
             <div className="header-line" />
 
-            {/* Messages — badge = total unread inbound messages */}
-            <div className="header-item">
-              <div className="dropdown me-2">
-                <Link to={route.dashboard} className="btn topbar-link">
-                  <i className="ti ti-message-circle-exclamation" />
-                  {totalUnread > 0 && (
-                    <span className="badge rounded-pill">
-                      {totalUnread > 99 ? "99+" : totalUnread}
-                    </span>
-                  )}
-                </Link>
-              </div>
-            </div>
-
+        
             {/* Notifications — badge = assigned open conversations */}
             <div className="header-item">
               <div className="dropdown me-2">
@@ -401,11 +329,7 @@ useEffect(() => {
                       </div>
                     )}
                   </div>
-                  <div className="p-2 rounded-bottom border-top text-center">
-                    <Link to={route.dashboard} className="text-decoration-underline fs-14 mb-0">
-                      Go to Inbox
-                    </Link>
-                  </div>
+                  
                 </div>
               </div>
             </div>

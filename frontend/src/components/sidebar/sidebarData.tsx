@@ -62,22 +62,21 @@ export const SidebarData = [
         icon: "receipt", base: "sales", materialicons: "start", dot: false,
         roles: [ADMIN, MANAGER, CLERK], submenuItems: [],
       },
-      {
-        key: "suppliers", label: "Supply", link: "", submenu: true, showSubRoute: false,
+            {
+        key: "supply_menu", label: "Supply", link: "", submenu: true, showSubRoute: false,
         icon: "truck-delivery", base: "sales", materialicons: "start", dot: false,
-        roles: [ADMIN, MANAGER, CLERK], submenuItems: [
-
-           {
-            key: "", label: "Suppliers", link: route.suppliers, submenu: false, showSubRoute: false,
+        roles: [ADMIN, MANAGER, CLERK],
+        submenuItems: [
+          {
+            key: "suppliers", label: "Suppliers", link: route.suppliers, submenu: false, showSubRoute: false,
             icon: "building-store", base: "users", materialicons: "start", dot: false,
-            roles: [ADMIN], submenuItems: [],
+            roles: [ADMIN, MANAGER, CLERK], submenuItems: [],
           },
           {
-            key: "", label: "Supplies", link: route.supplies, submenu: false, showSubRoute: false,
+            key: "supplies", label: "Supplies", link: route.supplies, submenu: false, showSubRoute: false,
             icon: "package", base: "sources", materialicons: "start", dot: false,
-            roles: [ADMIN], submenuItems: [],
+            roles: [ADMIN, MANAGER, CLERK], submenuItems: [],
           },
-
         ],
       },
       {
@@ -158,20 +157,15 @@ export const SidebarData = [
         icon: "building-bank", base: "users", materialicons: "start", dot: false,
         roles: [ADMIN], submenuItems: [],
       },
-    ],
-  },
 
-  {
-    tittle: "Reports",
-    icon: "airplay",
-    showAsTab: true,
-    separateRoute: false,
-    submenuItems: [
-      {
+       {
         key: "sales_reports", label: "Reports", link: route.reports, submenu: false, showSubRoute: false,
         icon: "chart-histogram", base: "case-reports", materialicons: "start", dot: false,
         roles: [ADMIN, MANAGER], submenuItems: [],
       },
     ],
   },
-];
+
+ 
+     
+    ]

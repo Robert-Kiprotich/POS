@@ -8,15 +8,14 @@ import AISupport from "../pages/ai-support/AISupport";
 
 import { useEffect } from "react";
 import { resetMobileSidebar } from "../core/redux/sidebarSlice";
-
+import OfflineBootstrap from "../offline/OfflineBootstrap";
 
 
 
 const Feature = () => {
   const location = useLocation();
 
-  const isLoggedIn = !!sessionStorage.getItem("user");
-  if (!isLoggedIn) return <Navigate to="/login" replace />;
+  
   const dispatch = useDispatch();
   const themeSettings = useSelector((state: any) => state.theme.themeSettings);
   const { miniSidebar, mobileSidebar, expandMenu } = useSelector(
@@ -68,7 +67,8 @@ useEffect(() => {
     document.removeEventListener('click', handleCloseFilterClick);
   };
 }, []);
-
+const isLoggedIn = !!sessionStorage.getItem("user");
+  if (!isLoggedIn) return <Navigate to="/login" replace />;
   return (
     <>
     <div
@@ -93,6 +93,7 @@ useEffect(() => {
       `}
       >
         <div className="main-wrapper">
+           <OfflineBootstrap />
           {!isWallboardPage && <Header/>}
           {!isWallboardPage && <Sidebar/>}
           <Outlet />

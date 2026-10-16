@@ -13,7 +13,9 @@ import '@tabler/icons-webfont/dist/tabler-icons.css';
 import "../node_modules/@fortawesome/fontawesome-free/css/fontawesome.min.css";
 import "../node_modules/@fortawesome/fontawesome-free/css/all.min.css";
 import "./index.scss"
-
+import { registerSW } from "virtual:pwa-register";
+registerSW({ immediate: true });
+navigator.storage?.persist?.();
 
 
 createRoot(document.getElementById('root')!).render(
