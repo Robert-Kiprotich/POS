@@ -18,3 +18,4 @@ __pycache__/
 # Python virtual environments
 venv/
 .venv/
+db.sqlite3
