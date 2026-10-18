@@ -294,6 +294,11 @@ class VeterinaryEPrescription(models.Model):
     # Core Prescription Information
     date_of_prescription = models.DateField()
     drug_category = models.CharField(max_length=3, choices=DRUG_CATEGORIES)
+    drug_category = models.CharField(max_length=3, choices=DRUG_CATEGORIES, default='II')
+
+    practitioner_name = models.CharField(max_length=150, blank=True)
+    practitioner_contact = models.CharField("Practitioner contact", max_length=100, blank=True)
+    practitioner_kvb_no = models.CharField("Practitioner K.V.B No.", max_length=100, blank=True)
     prescription_target = models.CharField(max_length=30, choices=PRESCRIPTION_TARGETS)
     
     # Animal Details
@@ -808,15 +813,25 @@ class Supplier(models.Model):
         NET_30 = "net_30", "Next 30 days"
         NET_60 = "net_60", "Next 60 days"
 
+    class PaymentMethod(models.TextChoices):
+        BANK = "bank", "Bank"
+        MPESA = "mpesa", "M-Pesa"
+
     name = models.CharField(max_length=150, unique=True)
     contact_person = models.CharField(max_length=150, blank=True, default="")
+    head_office_contact = models.CharField(max_length=150, blank=True, default="")
     phone = models.CharField(max_length=32, blank=True, default="")
     alt_phone = models.CharField(max_length=32, blank=True, default="")
     email = models.EmailField(blank=True, default="")
     address = models.CharField(max_length=255, blank=True, default="")
+    location = models.CharField(max_length=255, blank=True, default="")
     kra_pin = models.CharField("KRA PIN", max_length=50, blank=True, default="")
     bank_name = models.CharField(max_length=100, blank=True, default="")
     bank_account = models.CharField(max_length=50, blank=True, default="")
+    payment_method = models.CharField(max_length=10, choices=PaymentMethod.choices, blank=True, default="")
+    account_name = models.CharField(max_length=150, blank=True, default="")
+    mpesa_paybill = models.CharField(max_length=20, blank=True, default="")
+    mpesa_account = models.CharField(max_length=50, blank=True, default="")
     payment_terms = models.CharField(
         max_length=10, choices=PaymentTerms.choices, default=PaymentTerms.CASH
     )
@@ -824,7 +839,6 @@ class Supplier(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
     class Meta:
         ordering = ["name"]
 

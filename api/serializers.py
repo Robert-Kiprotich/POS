@@ -485,6 +485,9 @@ class VeterinaryEPrescriptionSerializer(serializers.ModelSerializer):
             "drug_category",
             "drug_category_display",
             "prescription_target",
+            "practitioner_name",
+            "practitioner_contact",
+            "practitioner_kvb_no",
             "prescription_target_display",
             # Animal
             "animal_species",
@@ -1188,6 +1191,7 @@ class ChequeDepositSerializer(serializers.ModelSerializer):
 
 class SupplierSerializer(serializers.ModelSerializer):
     payment_terms_display = serializers.CharField(source="get_payment_terms_display", read_only=True)
+    payment_method_display = serializers.CharField(source="get_payment_method_display", read_only=True)
     total_billed = serializers.SerializerMethodField()
     total_paid = serializers.SerializerMethodField()
     balance = serializers.SerializerMethodField()
@@ -1196,9 +1200,13 @@ class SupplierSerializer(serializers.ModelSerializer):
     class Meta:
         model = Supplier
         fields = [
-            "id", "name", "contact_person", "phone", "alt_phone", "email", "address",
-            "kra_pin", "bank_name", "bank_account", "payment_terms", "payment_terms_display",
-            "notes","total_billed", "total_paid", "balance", "payment_status", "is_active", "created_at", "updated_at",
+            "id", "name", "contact_person", "head_office_contact", "phone", "alt_phone", "email",
+            "address", "location", "kra_pin",
+            "payment_method", "payment_method_display", "account_name",
+            "bank_name", "bank_account", "mpesa_paybill", "mpesa_account",
+            "payment_terms", "payment_terms_display",
+            "notes", "total_billed", "total_paid", "balance", "payment_status",
+            "is_active", "created_at", "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at"]
 
@@ -1238,6 +1246,34 @@ class SupplierSerializer(serializers.ModelSerializer):
 
     def validate_kra_pin(self, value):
         return value.strip().upper()
+    def validate(self, attrs):
+        def pick(name):
+            return attrs[name] if name in attrs else getattr(self.instance, name, "")
+
+        method = pick("payment_method")
+        errors = {}
+        if method == "bank":
+            if not (pick("bank_name") or "").strip():
+                errors["bank_name"] = "Enter the bank name."
+            if not (pick("bank_account") or "").strip():
+                errors["bank_account"] = "Enter the account number."
+        elif method == "mpesa":
+            if not (pick("mpesa_paybill") or "").strip():
+                errors["mpesa_paybill"] = "Enter the paybill number."
+            if not (pick("mpesa_account") or "").strip():
+                errors["mpesa_account"] = "Enter the M-Pesa account number."
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        # Only tidy up when the method is being set, so old records keep their bank details
+        if "payment_method" in attrs:
+            if method == "bank":
+                attrs.update(mpesa_paybill="", mpesa_account="")
+            elif method == "mpesa":
+                attrs.update(bank_name="", bank_account="")
+            else:
+                attrs.update(bank_name="", bank_account="", mpesa_paybill="", mpesa_account="", account_name="")
+        return attrs
 
 class PettyCashExpenseSerializer(serializers.ModelSerializer):
     cashier_name = serializers.SerializerMethodField()
@@ -1552,6 +1588,11 @@ class SupplySerializer(serializers.ModelSerializer):
     total_units = serializers.SerializerMethodField()
     has_invoice = serializers.SerializerMethodField()
     can_edit = serializers.SerializerMethodField()
+    invoice_total = serializers.SerializerMethodField()
+    amount_paid = serializers.SerializerMethodField()
+    balance_due = serializers.SerializerMethodField()
+    payment_status = serializers.SerializerMethodField()
+    payments = serializers.SerializerMethodField()
 
     class Meta:
         model = Supply
@@ -1559,7 +1600,8 @@ class SupplySerializer(serializers.ModelSerializer):
             "id", "reference", "supplier", "supplier_name", "supplier_phone",
             "supply_date", "supplier_ref", "status", "status_display", "notes",
             "purchase_invoice", "purchase_invoice_number", "has_invoice", "can_edit",
-            "items", "total_units", "total_cost",
+            "items", "total_units", "total_cost",            "items", "total_units", "total_cost",
+            "invoice_total", "amount_paid", "balance_due", "payment_status", "payments",
             "received_by", "received_by_name", "created_at", "updated_at",
         ]
 
@@ -1579,6 +1621,38 @@ class SupplySerializer(serializers.ModelSerializer):
             return False
         b = obj.purchase_invoice
         return not (b and b.payments_made.filter(status="paid").exists())
+    def _live_payments(self, obj):
+        b = obj.purchase_invoice
+        if not b or b.status == SalesInvoice.Status.CANCELLED:
+            return []
+        # sorted in Python so a prefetch on payments_made is used
+        return sorted(b.payments_made.all(), key=lambda p: (p.payment_date, p.id), reverse=True)
+
+    def _paid(self, obj):
+        return sum((p.amount for p in self._live_payments(obj) if p.status == "paid"), Decimal("0.00"))
+
+    def get_invoice_total(self, obj):
+        b = obj.purchase_invoice
+        return b.total_amount if b and b.status != SalesInvoice.Status.CANCELLED else None
+
+    def get_amount_paid(self, obj):
+        return self._paid(obj)
+
+    def get_balance_due(self, obj):
+        total = self.get_invoice_total(obj)
+        return None if total is None else max(total - self._paid(obj), Decimal("0.00"))
+
+    def get_payment_status(self, obj):
+        total = self.get_invoice_total(obj)
+        if total is None:
+            return None
+        paid = self._paid(obj)
+        if paid <= 0:
+            return "not_paid"
+        return "paid" if paid >= total else "partial"
+
+    def get_payments(self, obj):
+        return BusinessPaymentSerializer(self._live_payments(obj), many=True, context=self.context).data
 
 
 class SupplyWriteSerializer(serializers.ModelSerializer):

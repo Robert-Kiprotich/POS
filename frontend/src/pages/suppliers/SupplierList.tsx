@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import type { ReactNode } from "react";
 import * as XLSX from "xlsx";
 import API from "../../services/api";
 import { useNavigate, useLocation } from "react-router";
@@ -6,35 +7,32 @@ import { useNavigate, useLocation } from "react-router";
 const TERMS: Record<string, string> = {
   cash: "Cash on delivery",
   net_7: "Net 7 days",
-  net_14: "Net 14 days",
-  net_30: "Net 30 days",
-  net_60: "Net 60 days",
+  net_14: "Next 14 days",
+  net_30: "Next 30 days",
+  net_60: "Next 60 days",
 };
-
-const COLUMNS = [
-  { key: "name", label: "Supplier" },
-  { key: "contact_person", label: "Contact Person" },
-  { key: "phone", label: "Phone" },
-  { key: "email", label: "Email" },
-  { key: "kra_pin", label: "KRA PIN" },
-  { key: "payment_terms_display", label: "Payment Terms" },
-  { key: "is_active", label: "Status" },
-] as const;
 
 const emptyForm = {
   name: "",
   contact_person: "",
+  head_office_contact: "",
   phone: "",
   alt_phone: "",
   email: "",
   address: "",
+  location: "",
   kra_pin: "",
+  payment_method: "",
+  account_name: "",
   bank_name: "",
   bank_account: "",
+  mpesa_paybill: "",
+  mpesa_account: "",
   payment_terms: "cash",
   notes: "",
   is_active: true,
 };
+
 const money = (n: any) =>
   `KES ${Number(n || 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -45,6 +43,78 @@ const PAY_STATUS_CLS: Record<string, string> = {
   paid: "badge bg-success-transparent text-success",
 };
 
+// ── Column config: one list drives the table header, the table cells and the exports ──
+type Col = {
+  key: string;
+  label: string;
+  end?: boolean;                   // right-align (numbers)
+  table?: boolean;                 // show in the table (default true)
+  exp?: boolean;                   // include in CSV / Excel (default true)
+  render?: (s: any) => ReactNode;  // custom table cell
+};
+
+const dash = <span className="text-muted">—</span>;
+
+const COLUMNS: Col[] = [
+  {
+    key: "name", label: "Supplier",
+    render: s => (
+      <>
+        <div className="fw-semibold text-dark">{s.name}</div>
+        {s.payment_method === "bank" && s.bank_name && (
+          <div className="text-muted fs-12">{s.bank_name} · {s.bank_account}</div>
+        )}
+        {s.payment_method === "mpesa" && s.mpesa_paybill && (
+          <div className="text-muted fs-12">Paybill {s.mpesa_paybill} · Acc {s.mpesa_account}</div>
+        )}
+      </>
+    ),
+  },
+  { key: "contact_person", label: "Contact Person" },
+  { key: "head_office_contact", label: "Head Office Contact", table: false },
+  { key: "phone", label: "Phone" },
+  { key: "email", label: "Email" },
+  { key: "location", label: "Location", table: false },
+  { key: "kra_pin", label: "KRA PIN" },
+  { key: "payment_method_display", label: "Payment Method", table: false },
+  { key: "account_name", label: "Account Name", table: false },
+  { key: "bank_name", label: "Bank", table: false },
+  { key: "bank_account", label: "Account No.", table: false },
+  { key: "mpesa_paybill", label: "Paybill", table: false },
+  { key: "mpesa_account", label: "M-Pesa Account", table: false },
+  { key: "total_billed", label: "Billed", end: true, render: s => money(s.total_billed) },
+  { key: "total_paid", label: "Paid", end: true, render: s => money(s.total_paid) },
+  {
+    key: "balance", label: "Balance", end: true,
+    render: s => <span className={`fw-semibold ${s.balance > 0 ? "text-danger" : ""}`}>{money(s.balance)}</span>,
+  },
+  {
+    key: "payment_status", label: "Payment", exp: false,
+    render: s => s.payment_status
+      ? <span className={PAY_STATUS_CLS[s.payment_status]}>{PAY_STATUS[s.payment_status]}</span>
+      : dash,
+  },
+  {
+    key: "payment_terms_display", label: "Terms",
+    render: s => (
+      <span className={`badge ${s.payment_terms === "cash" ? "bg-success-transparent text-success" : "bg-warning-transparent text-warning"}`}>
+        {s.payment_terms_display || TERMS[s.payment_terms] || s.payment_terms}
+      </span>
+    ),
+  },
+  {
+    key: "is_active", label: "Status",
+    render: s => (
+      <span className={`badge ${s.is_active ? "bg-success-transparent text-success" : "bg-secondary-transparent text-secondary"}`}>
+        {s.is_active ? "Active" : "Inactive"}
+      </span>
+    ),
+  },
+];
+
+const TABLE_COLS = COLUMNS.filter(c => c.table !== false);
+const EXPORT_COLS = COLUMNS.filter(c => c.exp !== false);
+
 function cell(r: any, key: string) {
   if (key === "is_active") return r.is_active ? "Active" : "Inactive";
   return String(r[key] ?? "");
@@ -52,8 +122,8 @@ function cell(r: any, key: string) {
 
 function exportCSV(rows: any[]) {
   const lines = [
-    COLUMNS.map(c => c.label).join(","),
-    ...rows.map(r => COLUMNS.map(c => `"${cell(r, c.key).replace(/"/g, '""')}"`).join(",")),
+    EXPORT_COLS.map(c => c.label).join(","),
+    ...rows.map(r => EXPORT_COLS.map(c => `"${cell(r, c.key).replace(/"/g, '""')}"`).join(",")),
   ];
   const blob = new Blob([lines.join("\n")], { type: "text/csv" });
   const a = document.createElement("a");
@@ -63,7 +133,7 @@ function exportCSV(rows: any[]) {
 }
 
 function exportExcel(rows: any[]) {
-  const data = [COLUMNS.map(c => c.label), ...rows.map(r => COLUMNS.map(c => cell(r, c.key)))];
+  const data = [EXPORT_COLS.map(c => c.label), ...rows.map(r => EXPORT_COLS.map(c => cell(r, c.key)))];
   const ws = XLSX.utils.aoa_to_sheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Suppliers");
@@ -83,7 +153,7 @@ function errorMessage(err: any) {
 
 export default function SupplierList() {
   const [suppliers, setSuppliers] = useState<any[]>([]);
-    const navigate = useNavigate();
+  const navigate = useNavigate();
   const location = useLocation();
   const returnTo = (location.state as any)?.returnTo as string | undefined;
   const [filtered, setFiltered] = useState<any[]>([]);
@@ -124,7 +194,9 @@ export default function SupplierList() {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setPage(1); }, [search, statusFilter, termsFilter]);
- useEffect(() => {
+
+  // Arriving from "Register this supplier" on the Supplies page
+  useEffect(() => {
     const st = location.state as any;
     if (st?.registerSupplier) {
       setEditingId(null);
@@ -132,7 +204,8 @@ export default function SupplierList() {
       setFormError("");
       setShowOffcanvas(true);
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     let list = suppliers;
     if (statusFilter === "active") list = list.filter(s => s.is_active);
@@ -143,11 +216,13 @@ export default function SupplierList() {
       list = list.filter(s =>
         (s.name || "").toLowerCase().includes(q) ||
         (s.contact_person || "").toLowerCase().includes(q) ||
+        (s.head_office_contact || "").toLowerCase().includes(q) ||
         (s.phone || "").toLowerCase().includes(q) ||
         (s.email || "").toLowerCase().includes(q) ||
         (s.kra_pin || "").toLowerCase().includes(q) ||
         (s.bank_name || "").toLowerCase().includes(q) ||
-        (s.address || "").toLowerCase().includes(q)
+        (s.address || "").toLowerCase().includes(q) ||
+        (s.location || "").toLowerCase().includes(q)
       );
     }
     setFiltered(list);
@@ -172,13 +247,19 @@ export default function SupplierList() {
     setForm({
       name: s.name || "",
       contact_person: s.contact_person || "",
+      head_office_contact: s.head_office_contact || "",
       phone: s.phone || "",
       alt_phone: s.alt_phone || "",
       email: s.email || "",
       address: s.address || "",
+      location: s.location || "",
       kra_pin: s.kra_pin || "",
+      payment_method: s.payment_method || "",
+      account_name: s.account_name || "",
       bank_name: s.bank_name || "",
       bank_account: s.bank_account || "",
+      mpesa_paybill: s.mpesa_paybill || "",
+      mpesa_account: s.mpesa_account || "",
       payment_terms: s.payment_terms || "cash",
       notes: s.notes || "",
       is_active: !!s.is_active,
@@ -196,6 +277,10 @@ export default function SupplierList() {
     if (!form.name.trim()) return setFormError("Supplier name is required.");
     if (!form.phone.trim() && !form.email.trim())
       return setFormError("Enter at least a phone number or an email so you can reach this supplier.");
+    if (form.payment_method === "bank" && (!form.bank_name.trim() || !form.bank_account.trim()))
+      return setFormError("Enter the bank name and account number.");
+    if (form.payment_method === "mpesa" && (!form.mpesa_paybill.trim() || !form.mpesa_account.trim()))
+      return setFormError("Enter the M-Pesa paybill and account number.");
 
     setSaving(true);
     try {
@@ -209,7 +294,7 @@ export default function SupplierList() {
         return;
       }
       load();
-    }  catch (err:any){
+    } catch (err: any) {
       console.error("Error saving supplier:", err);
       setFormError(errorMessage(err));
     } finally {
@@ -343,40 +428,30 @@ export default function SupplierList() {
                 <table className="table table-hover mb-0 fs-13">
                   <thead className="table-light">
                     <tr>
-                      {COLUMNS.map(c => <th key={c.key} className="text-nowrap">{c.label}</th>)}
+                      {TABLE_COLS.map(c => (
+                        <th key={c.key} className={`text-nowrap ${c.end ? "text-end" : ""}`}>{c.label}</th>
+                      ))}
                       <th className="text-end text-nowrap">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filtered.slice((page - 1) * pageSize, page * pageSize).map(s => (
                       <tr key={s.id}>
-                        <td className="fw-semibold text-dark text-nowrap">{s.name}</td>
-                        <td className="text-nowrap">{s.contact_person || <span className="text-muted">—</span>}</td>
-                        <td className="text-nowrap">{s.phone || <span className="text-muted">—</span>}</td>
-                        <td className="text-nowrap">{s.email || <span className="text-muted">—</span>}</td>
-                        <td className="text-nowrap">{s.kra_pin || <span className="text-muted">—</span>}</td>
-                        <td className="text-end">{money(s.total_billed)}</td>
-<td className="text-end">{money(s.total_paid)}</td>
-<td className={`text-end fw-semibold ${s.balance > 0 ? "text-danger" : ""}`}>{money(s.balance)}</td>
-<td>{s.payment_status && <span className={PAY_STATUS_CLS[s.payment_status]}>{PAY_STATUS[s.payment_status]}</span>}</td>
-                        <td className="text-nowrap">
-                          <span className={`badge ${s.payment_terms === "cash" ? "bg-success-transparent text-success" : "bg-warning-transparent text-warning"}`}>
-                            {s.payment_terms_display || TERMS[s.payment_terms] || s.payment_terms}
-                          </span>
-                        </td>
-                        <td>
-                          <span className={`badge ${s.is_active ? "bg-success-transparent text-success" : "bg-secondary-transparent text-secondary"}`}>
-                            {s.is_active ? "Active" : "Inactive"}
-                          </span>
-                        </td>
+                        {TABLE_COLS.map(c => (
+                          <td key={c.key} className={`text-nowrap ${c.end ? "text-end" : ""}`}>
+                            {c.render ? c.render(s) : (s[c.key] || dash)}
+                          </td>
+                        ))}
                         <td className="text-end text-nowrap">
                           <button className="btn btn-sm btn-icon btn-outline-secondary me-1" title="Edit" onClick={() => openEdit(s)}>
                             <i className="ti ti-edit" />
                           </button>
-                          <button className="btn btn-sm btn-icon btn-outline-warning me-1" title={s.is_active ? "Mark inactive" : "Mark active"} onClick={() => toggleStatus(s)}>
+                          <button className="btn btn-sm btn-icon btn-outline-warning me-1"
+                            title={s.is_active ? "Mark inactive" : "Mark active"} onClick={() => toggleStatus(s)}>
                             <i className={`ti ${s.is_active ? "ti-player-pause" : "ti-player-play"}`} />
                           </button>
-                          <button className="btn btn-sm btn-icon btn-outline-danger" title="Delete" onClick={() => { setDeleteError(""); setDeleteTarget(s); }}>
+                          <button className="btn btn-sm btn-icon btn-outline-danger" title="Delete"
+                            onClick={() => { setDeleteError(""); setDeleteTarget(s); }}>
                             <i className="ti ti-trash" />
                           </button>
                         </td>
@@ -431,12 +506,13 @@ export default function SupplierList() {
             </div>
             <div className="offcanvas-body">
               {formError && <div className="alert alert-danger fs-13 py-2">{formError}</div>}
-                        {returnTo && !editingId && (
+              {returnTo && !editingId && (
                 <div className="alert alert-info fs-12 py-2">
                   <i className="ti ti-info-circle me-1" />
                   After saving, you'll go back to Record Supply with this supplier selected.
                 </div>
               )}
+
               <div className="mb-3">
                 <label className="form-label fs-13 fw-medium">Supplier name <span className="text-danger">*</span></label>
                 <input className="form-control" value={form.name} onChange={set("name")} placeholder="e.g. Cooper Kenya Ltd" />
@@ -445,6 +521,12 @@ export default function SupplierList() {
               <div className="mb-3">
                 <label className="form-label fs-13 fw-medium">Contact person</label>
                 <input className="form-control" value={form.contact_person} onChange={set("contact_person")} />
+              </div>
+
+              <div className="mb-3">
+                <label className="form-label fs-13 fw-medium">Head office contact</label>
+                <input className="form-control" value={form.head_office_contact} onChange={set("head_office_contact")}
+                  placeholder="Head office phone / person" />
               </div>
 
               <div className="row g-2 mb-3">
@@ -463,9 +545,16 @@ export default function SupplierList() {
                 <input type="email" className="form-control" value={form.email} onChange={set("email")} />
               </div>
 
-              <div className="mb-3">
-                <label className="form-label fs-13 fw-medium">Address</label>
-                <input className="form-control" value={form.address} onChange={set("address")} />
+              <div className="row g-2 mb-3">
+                <div className="col-6">
+                  <label className="form-label fs-13 fw-medium">Address</label>
+                  <input className="form-control" value={form.address} onChange={set("address")} />
+                </div>
+                <div className="col-6">
+                  <label className="form-label fs-13 fw-medium">Location</label>
+                  <input className="form-control" value={form.location} onChange={set("location")}
+                    placeholder="Town / area" />
+                </div>
               </div>
 
               <div className="row g-2 mb-3">
@@ -481,16 +570,48 @@ export default function SupplierList() {
                 </div>
               </div>
 
-              <div className="row g-2 mb-3">
-                <div className="col-6">
-                  <label className="form-label fs-13 fw-medium">Bank name</label>
-                  <input className="form-control" value={form.bank_name} onChange={set("bank_name")} />
-                </div>
-                <div className="col-6">
-                  <label className="form-label fs-13 fw-medium">Bank account</label>
-                  <input className="form-control" value={form.bank_account} onChange={set("bank_account")} />
-                </div>
+              <div className="mb-3">
+                <label className="form-label fs-13 fw-medium">Payment method</label>
+                <select className="form-select" value={form.payment_method} onChange={set("payment_method")}>
+                  <option value="">— Not set —</option>
+                  <option value="bank">Bank</option>
+                  <option value="mpesa">M-Pesa</option>
+                </select>
               </div>
+
+              {form.payment_method === "bank" && (
+                <div className="row g-2 mb-3">
+                  <div className="col-6">
+                    <label className="form-label fs-13 fw-medium">Bank name <span className="text-danger">*</span></label>
+                    <input className="form-control" value={form.bank_name} onChange={set("bank_name")} />
+                  </div>
+                  <div className="col-6">
+                    <label className="form-label fs-13 fw-medium">Account number <span className="text-danger">*</span></label>
+                    <input className="form-control" value={form.bank_account} onChange={set("bank_account")} />
+                  </div>
+                  <div className="col-12">
+                    <label className="form-label fs-13 fw-medium">Account name</label>
+                    <input className="form-control" value={form.account_name} onChange={set("account_name")} />
+                  </div>
+                </div>
+              )}
+
+              {form.payment_method === "mpesa" && (
+                <div className="row g-2 mb-3">
+                  <div className="col-6">
+                    <label className="form-label fs-13 fw-medium">Paybill number <span className="text-danger">*</span></label>
+                    <input className="form-control" value={form.mpesa_paybill} onChange={set("mpesa_paybill")} />
+                  </div>
+                  <div className="col-6">
+                    <label className="form-label fs-13 fw-medium">Account number <span className="text-danger">*</span></label>
+                    <input className="form-control" value={form.mpesa_account} onChange={set("mpesa_account")} />
+                  </div>
+                  <div className="col-12">
+                    <label className="form-label fs-13 fw-medium">Account name</label>
+                    <input className="form-control" value={form.account_name} onChange={set("account_name")} />
+                  </div>
+                </div>
+              )}
 
               <div className="mb-3">
                 <label className="form-label fs-13 fw-medium">Notes</label>

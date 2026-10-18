@@ -11,6 +11,10 @@ const money = (n: any) =>
 
 const today = () => new Date().toISOString().slice(0, 10);
 const DRAFT_KEY = "supply_draft";
+const PAYMENT_METHODS = ["cash", "card", "mpesa", "bank_transfer", "other"] as const;
+const METHOD_LABELS: Record<string, string> = {
+  cash: "Cash", card: "Card", mpesa: "M-Pesa", bank_transfer: "Bank Transfer", other: "Other",
+};
 
 const STATUS_CLS: Record<string, string> = {
   received: "badge bg-success-transparent text-success",
@@ -121,6 +125,14 @@ export default function SupplyList() {
 const location = useLocation();
 const [supplierQuery, setSupplierQuery] = useState("");
 const [showSupplierList, setShowSupplierList] = useState(false);
+const [showPaymentForm, setShowPaymentForm] = useState(false);
+const [payMethod, setPayMethod] = useState<typeof PAYMENT_METHODS[number]>("cash");
+const [payAmount, setPayAmount] = useState("");
+const [payReference, setPayReference] = useState("");
+const [payDate, setPayDate] = useState(today());
+const [savingPayment, setSavingPayment] = useState(false);
+const [payError, setPayError] = useState("");
+const [viewLoading, setViewLoading] = useState(false);
 
 
   
@@ -298,12 +310,56 @@ const formTotal = formSub + formVat;
     setShowForm(true);
   }
 
-  function openView(s: any) {
-    setViewing(s);
-    setMode("view");
-    setFormError("");
-    setShowForm(true);
+ async function refreshViewing(id: number, spinner = true) {
+  if (spinner) setViewLoading(true);
+  try {
+    const res = await API.get(`supplies/${id}/`);
+    const raw = res.data?.data ?? res.data;
+    if (raw?.id != null) setViewing(raw);
+  } catch (err) {
+    console.error("Error loading supply:", err);
+  } finally {
+    setViewLoading(false);
   }
+}
+
+function openView(s: any) {
+  setViewing(s);
+  setMode("view");
+  setFormError("");
+  setShowPaymentForm(false);
+  setPayError("");
+  setPayAmount(""); setPayReference(""); setPayMethod("cash"); setPayDate(today());
+  setShowForm(true);
+  refreshViewing(s.id);
+}
+
+async function submitPayment() {
+  setPayError("");
+  const amt = parseFloat(payAmount);
+  if (!amt || amt <= 0) return setPayError("Enter a valid payment amount.");
+  setSavingPayment(true);
+  try {
+    await API.post("business-payments/", {
+      category: "invoice",                 // must match your BusinessPayment.Category value
+      purchase_invoice: viewing.purchase_invoice,
+      amount: amt,
+      method: payMethod,
+      reference: payReference,
+      payment_date: payDate,
+      description: `Payment for supply ${viewing.reference}`,
+    });
+    setShowPaymentForm(false);
+    setPayAmount(""); setPayReference(""); setPayMethod("cash"); setPayDate(today());
+    await refreshViewing(viewing.id, false);
+    load();
+    showSuccess("Payment was recorded.", "Payment saved");
+  } catch (err: any) {
+    setPayError(errorMessage(err, "Failed to record payment."));
+  } finally {
+    setSavingPayment(false);
+  }
+}
 
   function openEdit(s: any) {
     setMode("form");
@@ -473,33 +529,36 @@ const formTotal = formSub + formVat;
           </div>
         </div>
 
-        {/* Stat tiles */}
-        {!loading && supplies.length > 0 && (() => {
-          const tiles = [
-            { label: "Supplies", value: live.length, icon: "ti-package-import", bg: "bg-primary-gradient-100", color: "text-primary" },
-            { label: "Units received", value: live.reduce((a, s) => a + (s.total_units || 0), 0), icon: "ti-stack-2", bg: "bg-success-gradient-100", color: "text-success" },
-            { label: "Total cost", value: money(live.reduce((a, s) => a + Number(s.total_cost || 0), 0)), icon: "ti-cash", bg: "bg-warning-gradient-100", color: "text-warning" },
-            { label: "Without invoice", value: live.filter(s => !s.has_invoice).length, icon: "ti-file-off", bg: "bg-danger-gradient-100", color: "text-danger" },
-          ];
-          return (
-            <div className="row g-3 mb-4">
-              {tiles.map(t => (
-                <div key={t.label} className="col-6 col-lg-3">
-                  <div className="card mb-0 shadow-none border">
-                    <div className="card-body p-3 position-relative">
-                      <p className="fw-medium mb-1 fs-13">{t.label}</p>
-                      <h4 className={`mb-0 ${t.color}`}>{t.value}</h4>
-                      <div className={`avatar avatar-rounded avatar-sm ${t.bg} position-absolute top-0 end-0 m-2 d-flex align-items-center justify-content-center`}>
-                        <i className={`ti ${t.icon} fs-5 ${t.color}`} />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
+     {/* Stat tiles */}
+{!loading && supplies.length > 0 && (() => {
+  const paid = live.reduce((a, s) => a + Number(s.amount_paid || 0), 0);
+  const balance = live.reduce((a, s) => a + Number(s.balance_due || 0), 0);
+  const tiles = [
+    { label: "Supplies", value: live.length, icon: "ti-package-import", bg: "bg-primary-gradient-100", color: "text-primary" },
+    { label: "Units received", value: live.reduce((a, s) => a + (s.total_units || 0), 0), icon: "ti-stack-2", bg: "bg-success-gradient-100", color: "text-success" },
+    { label: "Total cost", value: money(live.reduce((a, s) => a + Number(s.total_cost || 0), 0)), icon: "ti-cash", bg: "bg-warning-gradient-100", color: "text-warning" },
+    { label: "Amount paid", value: money(paid), icon: "ti-circle-check", bg: "bg-success-gradient-100", color: "text-success" },
+    { label: "Balance", value: money(balance), icon: "ti-clock-dollar", bg: "bg-danger-gradient-100", color: balance > 0 ? "text-danger" : "text-success" },
+    { label: "Without invoice", value: live.filter(s => !s.has_invoice).length, icon: "ti-file-off", bg: "bg-danger-gradient-100", color: "text-danger" },
+  ];
+  return (
+    <div className="row g-3 mb-4">
+      {tiles.map(t => (
+        <div key={t.label} className="col-6 col-md-4 col-xl-2">
+          <div className="card mb-0 shadow-none border">
+            <div className="card-body p-3 position-relative">
+              <p className="fw-medium mb-1 fs-13">{t.label}</p>
+              <h5 className={`mb-0 ${t.color}`}>{t.value}</h5>
+              <div className={`avatar avatar-rounded avatar-sm ${t.bg} position-absolute top-0 end-0 m-2 d-flex align-items-center justify-content-center`}>
+                <i className={`ti ${t.icon} fs-5 ${t.color}`} />
+              </div>
             </div>
-          );
-        })()}
-
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+})()}
         {/* Table card */}
         <div className="card shadow-none border">
           <div className="card-header border-bottom py-3 d-flex align-items-center justify-content-between flex-wrap gap-2">
@@ -649,6 +708,8 @@ const formTotal = formSub + formVat;
               </h5>
               <button type="button" className="btn-close" onClick={closeForm} />
             </div>
+
+
             <div className="offcanvas-body">
               {mode === "view" && viewing ? (
                 <div className="fs-13">
@@ -658,7 +719,27 @@ const formTotal = formSub + formVat;
                     
                     <div className="col-6 col-md-3"><div className="text-muted fs-12">Received by</div><div className="fw-semibold">{viewing.received_by_name}</div></div>
                   </div>
-
+{viewing.has_invoice && (() => {
+  const total = Number(viewing.invoice_total ?? viewing.total_cost ?? 0);
+  const paid = Number(viewing.amount_paid || 0);
+  const balance = Number(viewing.balance_due ?? total - paid);
+  return (
+    <div className="row g-2 mb-3">
+      {[
+        { label: "Invoice total", value: money(total), cls: "" },
+        { label: "Paid", value: money(paid), cls: "text-success" },
+        { label: "Balance", value: money(balance), cls: balance > 0 ? "text-danger" : "text-success" },
+      ].map(t => (
+        <div key={t.label} className="col-4">
+          <div className="border rounded p-2">
+            <p className="text-muted fs-12 mb-1">{t.label}</p>
+            <h6 className={`mb-0 fw-semibold ${t.cls}`}>{t.value}</h6>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+})()}
                   <div className="table-responsive border rounded">
                     <table className="table table-sm mb-0 fs-13">
                       <thead className="table-light">
@@ -686,6 +767,114 @@ const formTotal = formSub + formVat;
 
                   {viewing.notes && <div className="mt-3"><div className="text-muted fs-12">Notes</div><div style={{ whiteSpace: "pre-line" }}>{viewing.notes}</div></div>}
                   {viewing.has_invoice && <div className="mt-3 text-muted fs-12">Invoice: <strong>{viewing.purchase_invoice_number}</strong></div>}
+                  {viewing.has_invoice && viewing.status !== "cancelled" && (() => {
+  const payments: any[] = Array.isArray(viewing.payments) ? viewing.payments : [];
+  const total = Number(viewing.invoice_total ?? viewing.total_cost ?? 0);
+  const balance = Number(viewing.balance_due ?? total - Number(viewing.amount_paid || 0));
+  return (
+    <div className="card shadow-none border mt-3 mb-0">
+      <div className="card-header py-2 border-bottom d-flex align-items-center justify-content-between">
+        <div className="d-flex align-items-center gap-2">
+          <i className="ti ti-credit-card text-primary" />
+          <h6 className="mb-0 fw-semibold fs-14">Payments</h6>
+          <span className="badge bg-primary-transparent text-primary fs-11">{payments.length}</span>
+        </div>
+        {balance > 0 && (
+          <button className="btn btn-sm btn-primary" onClick={() => setShowPaymentForm(v => !v)}>
+            <i className="ti ti-plus me-1" />Record payment
+          </button>
+        )}
+      </div>
+
+      {showPaymentForm && (
+        <div className="card-body border-bottom bg-light py-3">
+          {payError && <div className="alert alert-danger fs-12 py-2">{payError}</div>}
+          <div className="row g-2">
+            <div className="col-sm-6">
+              <label className="form-label fs-12 mb-1">Method</label>
+              <select className="form-select form-select-sm fs-13" value={payMethod}
+                onChange={e => setPayMethod(e.target.value as any)}>
+                {PAYMENT_METHODS.map(m => <option key={m} value={m}>{METHOD_LABELS[m]}</option>)}
+              </select>
+            </div>
+            <div className="col-sm-6">
+              <label className="form-label fs-12 mb-1">Amount</label>
+              <input type="number" min={0} step="0.01" className="form-control form-control-sm fs-13"
+                value={payAmount} onChange={e => setPayAmount(e.target.value)}
+                placeholder={balance.toFixed(2)} />
+            </div>
+            <div className="col-sm-6">
+              <label className="form-label fs-12 mb-1">Reference</label>
+              <input type="text" className="form-control form-control-sm fs-13"
+                value={payReference} onChange={e => setPayReference(e.target.value)}
+                placeholder="M-Pesa code, cheque no…" />
+            </div>
+            <div className="col-sm-6">
+              <label className="form-label fs-12 mb-1">Payment date</label>
+              <input type="date" className="form-control form-control-sm fs-13" max={today()}
+                value={payDate} onChange={e => setPayDate(e.target.value)} />
+            </div>
+            <div className="col-12 d-flex gap-2 justify-content-end">
+              <button className="btn btn-sm btn-outline-secondary" onClick={() => setShowPaymentForm(false)}>Cancel</button>
+              <button className="btn btn-sm btn-primary" disabled={savingPayment} onClick={submitPayment}>
+                {savingPayment ? <span className="spinner-border spinner-border-sm" /> : "Save payment"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="card-body p-0">
+        {viewLoading && payments.length === 0 ? (
+          <div className="text-center text-muted py-3 fs-13">
+            <span className="spinner-border spinner-border-sm me-2" />Loading…
+          </div>
+        ) : payments.length === 0 ? (
+          <div className="text-center text-muted py-4 fs-13">
+            <i className="ti ti-credit-card-off fs-2 d-block mb-2" />No payments recorded yet
+          </div>
+        ) : (
+          <div className="table-responsive">
+            <table className="table table-sm mb-0 fs-13">
+              <thead className="table-light">
+                <tr>
+                  <th className="ps-3">Method</th><th>Amount</th><th>Reference</th>
+                  <th>Paid by</th><th>Date</th><th className="pe-3">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payments.map(p => {
+                  const cancelled = p.status === "cancelled";
+                  return (
+                    <tr key={p.id} className={cancelled ? "text-muted" : ""}
+                        style={cancelled ? { textDecoration: "line-through" } : undefined}>
+                      <td className="ps-3">
+                        <span className="badge bg-info-transparent text-info">
+                          {p.method_display || METHOD_LABELS[p.method] || p.method}
+                        </span>
+                      </td>
+                      <td className={`fw-semibold ${cancelled ? "" : "text-success"}`}>{money(p.amount)}</td>
+                      <td className="text-muted">{p.reference || "—"}</td>
+                      <td className="text-muted">{p.created_by_name}</td>
+                      <td className="text-muted text-nowrap">{p.payment_date}</td>
+                      <td className="pe-3">
+                        <span className={cancelled
+                          ? "badge bg-secondary-transparent text-secondary"
+                          : "badge bg-success-transparent text-success"}>
+                          {p.status_display}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+})()}
                   {!viewing.can_edit && viewing.status !== "cancelled" && (
                     <div className="alert alert-warning fs-12 py-2 mt-3 mb-0">
                       This supply can't be edited because its invoice has payments. Cancel those payments first.

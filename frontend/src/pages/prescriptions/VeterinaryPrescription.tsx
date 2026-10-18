@@ -7,12 +7,15 @@ function fmtDate(iso?: string) {
   return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
 
+// New prescriptions are always saved as Category II
+const DEFAULT_CATEGORY = "II";
+
 const COLUMNS = [
   { key: "date_of_prescription", label: "Date" },
   { key: "drug_trade_name",      label: "Drug" },
   { key: "animal_species",       label: "Species" },
-  { key: "drug_category",        label: "Category" },
   { key: "prescription_target",  label: "Target" },
+  { key: "practitioner_name",    label: "Practitioner" },
   { key: "name_of_the_buyer",    label: "Buyer" },
   { key: "quantity_purchased",   label: "Qty" },
   { key: "expiry_date",          label: "Expiry" },
@@ -22,8 +25,10 @@ type Mode = "add" | "edit" | "view";
 
 interface RxForm {
   date_of_prescription: string;
-  drug_category: string;
   prescription_target: string;
+  practitioner_name: string;
+  practitioner_contact: string;
+  practitioner_kvb_no: string;
   animal_species: string;
   breed: string;
   age: string;
@@ -49,8 +54,10 @@ interface RxForm {
 
 const emptyForm: RxForm = {
   date_of_prescription: new Date().toISOString().slice(0, 10),
-  drug_category: "I",
   prescription_target: "vet_surgeon",
+  practitioner_name: "",
+  practitioner_contact: "",
+  practitioner_kvb_no: "",
   animal_species: "",
   breed: "",
   age: "",
@@ -74,21 +81,21 @@ const emptyForm: RxForm = {
   signature_and_stamp: "",
 };
 
-const DRUG_CATEGORIES = [
-  { value: "I",  label: "I" },
-  { value: "II", label: "II" },
-];
-
 const PRESCRIPTION_TARGETS = [
-  { value: "vet_surgeon",      label: "Vet Surgeon" },
+  { value: "vet_surgeon",       label: "Vet Surgeon" },
   { value: "para_professional", label: "Para-Professional" },
 ];
+
+function cellText(r: any, key: string) {
+  if (key === "prescription_target") return r.prescription_target_display || r.prescription_target || "";
+  return String(r[key] ?? "");
+}
 
 function exportCSV(rows: any[]) {
   const headers = COLUMNS.map(c => c.label);
   const lines = [
     headers.join(","),
-    ...rows.map(r => COLUMNS.map(c => `"${String(r[c.key] ?? "").replace(/"/g, '""')}"`).join(",")),
+    ...rows.map(r => COLUMNS.map(c => `"${cellText(r, c.key).replace(/"/g, '""')}"`).join(",")),
   ];
   const blob = new Blob([lines.join("\n")], { type: "text/csv" });
   const a = document.createElement("a");
@@ -99,24 +106,57 @@ function exportCSV(rows: any[]) {
 
 function exportExcel(rows: any[]) {
   const headers = COLUMNS.map(c => c.label);
-  const data = [headers, ...rows.map(r => COLUMNS.map(c => String(r[c.key] ?? "")))];
+  const data = [headers, ...rows.map(r => COLUMNS.map(c => cellText(r, c.key)))];
   const ws = XLSX.utils.aoa_to_sheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "VetPrescriptions");
   XLSX.writeFile(wb, `veterinary_eprescriptions_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
+
 function esc(v: any) {
   return String(v ?? "")
     .replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
+function printInFrame(html: string) {
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.cssText =
+    "position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none;";
+  document.body.appendChild(iframe);
 
-function printPrescription(item: any) {
-  const win = window.open("", "_blank", "width=900,height=1000");
-  if (!win) {
-    alert("Allow popups to print the prescription.");
+  const win = iframe.contentWindow;
+  const doc = iframe.contentDocument || win?.document;
+  if (!win || !doc) {
+    iframe.remove();
     return;
   }
+
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    iframe.remove();
+  };
+
+  doc.open();
+  doc.write(html);
+  doc.close();
+
+  win.onafterprint = cleanup;
+  setTimeout(() => {
+    try {
+      win.focus();
+      win.print();
+    } catch (err) {
+      console.error("Print failed:", err);
+      cleanup();
+    }
+  }, 300);
+  setTimeout(cleanup, 60000); // fallback if the browser never fires afterprint
+}
+function printPrescription(item: any) {
+ 
 
   const val = (v: any) => (v ? esc(v) : "&mdash;");
   const field = (label: string, value: any, wide = false) =>
@@ -195,10 +235,15 @@ function printPrescription(item: any) {
     <h2>Veterinary e-Prescription</h2>
     <div class="sub">Prescription for veterinary drugs</div>
     <div class="chips">
-      <span class="chip cat">Drug Category ${esc(item.drug_category)}</span>
+      <span class="chip cat">Drug Category ${esc(item.drug_category || DEFAULT_CATEGORY)}</span>
       <span class="chip">${esc(target)}</span>
     </div>
   </div>
+
+  ${section("Practitioner Details",
+    field("Practitioner Name", item.practitioner_name) +
+    field("K.V.B No.", item.practitioner_kvb_no) +
+    field("Contact", item.practitioner_contact))}
 
   ${section("Animal Details",
     field("Species", item.animal_species) +
@@ -212,13 +257,13 @@ function printPrescription(item: any) {
     field("Quantity Purchased", item.quantity_purchased) +
     field("Drug Volume", item.drug_volume) +
     field("Expiry Date", item.expiry_date ? fmtDate(item.expiry_date) : "") +
-    field("Dosage", item.dosage, true))}
+    field("Dosage", item.dosage, true) +
+    field("Storage Condition", item.storage_condition, true) +
+    field("Side Effects", item.side_effect, true))}
 
   ${section("Treatment",
     field("Clinical Use", item.clinical_use, true) +
-    field("Duration of Treatment", item.duration_of_treatment) +
-    field("Storage Condition", item.storage_condition) +
-    field("Side Effects", item.side_effect))}
+    field("Duration of Treatment", item.duration_of_treatment, true))}
 
   <div class="sec warn">
     <div class="sec-t">Withdrawal Period</div>
@@ -250,29 +295,16 @@ function printPrescription(item: any) {
   </div>
 </body>
 </html>`;
+  printInFrame(html);
 
-  win.document.write(html);
-  win.document.close();
-
-  setTimeout(() => {
-    try {
-      win.focus();
-      win.print();
-    } catch (err) {
-      console.error("Print failed:", err);
-    } finally {
-      setTimeout(() => win.close(), 500);
-    }
-  }, 300);
-}
+  }
 export default function VeterinaryEPrescriptionsList() {
   const [items, setItems]       = useState<any[]>([]);
   const [filtered, setFiltered] = useState<any[]>([]);
   const [loading, setLoading]   = useState(true);
 
-  const [search, setSearch]                 = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("all");
-  const [targetFilter, setTargetFilter]     = useState("all");
+  const [search, setSearch]             = useState("");
+  const [targetFilter, setTargetFilter] = useState("all");
 
   const [page, setPage]         = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -298,24 +330,24 @@ export default function VeterinaryEPrescriptionsList() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { setPage(1); }, [search, categoryFilter, targetFilter]);
+  useEffect(() => { setPage(1); }, [search, targetFilter]);
 
   useEffect(() => {
     let list = items;
-    if (categoryFilter !== "all") list = list.filter(r => r.drug_category === categoryFilter);
-    if (targetFilter !== "all")   list = list.filter(r => r.prescription_target === targetFilter);
+    if (targetFilter !== "all") list = list.filter(r => r.prescription_target === targetFilter);
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter(r =>
         (r.drug_trade_name || "").toLowerCase().includes(q) ||
         (r.animal_species || "").toLowerCase().includes(q) ||
         (r.name_of_the_buyer || "").toLowerCase().includes(q) ||
+        (r.practitioner_name || "").toLowerCase().includes(q) ||
         (r.manufacturer || "").toLowerCase().includes(q) ||
         (r.batch_no || "").toLowerCase().includes(q)
       );
     }
     setFiltered(list);
-  }, [search, categoryFilter, targetFilter, items]);
+  }, [search, targetFilter, items]);
 
   const openOffcanvas = () => {
     const el = document.getElementById("vet-rx-offcanvas");
@@ -335,7 +367,7 @@ export default function VeterinaryEPrescriptionsList() {
   const handleOpenAdd = () => {
     setMode("add");
     setSelected(null);
-    setForm(emptyForm);
+    setForm({ ...emptyForm, date_of_prescription: new Date().toISOString().slice(0, 10) });
     setError("");
     openOffcanvas();
   };
@@ -345,8 +377,10 @@ export default function VeterinaryEPrescriptionsList() {
     setSelected(item);
     setForm({
       date_of_prescription: item.date_of_prescription || "",
-      drug_category: item.drug_category || "I",
       prescription_target: item.prescription_target || "vet_surgeon",
+      practitioner_name: item.practitioner_name || "",
+      practitioner_contact: item.practitioner_contact || "",
+      practitioner_kvb_no: item.practitioner_kvb_no || "",
       animal_species: item.animal_species || "",
       breed: item.breed || "",
       age: item.age || "",
@@ -393,9 +427,10 @@ export default function VeterinaryEPrescriptionsList() {
 
     try {
       if (mode === "edit" && selected) {
+        // Editing keeps whatever category the record already has
         await API.patch(`veterinary-eprescriptions/${selected.id}/`, payload);
       } else {
-        await API.post("veterinary-eprescriptions/", payload);
+        await API.post("veterinary-eprescriptions/", { ...payload, drug_category: DEFAULT_CATEGORY });
       }
       closeOffcanvas();
       load();
@@ -423,7 +458,7 @@ export default function VeterinaryEPrescriptionsList() {
     }
   };
 
-  const activeFilterCount = [categoryFilter !== "all", targetFilter !== "all"].filter(Boolean).length;
+  const activeFilterCount = [targetFilter !== "all"].filter(Boolean).length;
 
   return (
     <div className="page-wrapper">
@@ -454,10 +489,10 @@ export default function VeterinaryEPrescriptionsList() {
         {/* Tiles */}
         {!loading && items.length > 0 && (() => {
           const tiles = [
-            { label: "Total Prescriptions", value: items.length,                                      icon: "ti-prescription",   bg: "bg-primary-gradient-100", color: "text-primary" },
-            { label: "Category I",          value: items.filter(r => r.drug_category === "I").length,  icon: "ti-alert-triangle", bg: "bg-warning-gradient-100", color: "text-warning" },
-            { label: "Category II",         value: items.filter(r => r.drug_category === "II").length, icon: "ti-shield-check",   bg: "bg-info-gradient-100",    color: "text-info" },
-            { label: "Buyers",              value: new Set(items.map(r => r.name_of_the_buyer)).size,  icon: "ti-users",          bg: "bg-success-gradient-100", color: "text-success" },
+            { label: "Total Prescriptions", value: items.length,                                                       icon: "ti-prescription", bg: "bg-primary-gradient-100", color: "text-primary" },
+            { label: "Vet Surgeon",         value: items.filter(r => r.prescription_target === "vet_surgeon").length,       icon: "ti-stethoscope",  bg: "bg-info-gradient-100",    color: "text-info" },
+            { label: "Para-Professional",   value: items.filter(r => r.prescription_target === "para_professional").length, icon: "ti-user-check",   bg: "bg-warning-gradient-100", color: "text-warning" },
+            { label: "Buyers",              value: new Set(items.map(r => r.name_of_the_buyer)).size,                       icon: "ti-users",        bg: "bg-success-gradient-100", color: "text-success" },
           ];
           return (
             <div className="row g-3 mb-4">
@@ -484,24 +519,18 @@ export default function VeterinaryEPrescriptionsList() {
             <div className="input-group input-group-flat" style={{ maxWidth: 300 }}>
               <span className="input-group-text bg-transparent border-end-0"><i className="ti ti-search text-muted" /></span>
               <input type="text" className="form-control border-start-0 ps-1 fs-13"
-                placeholder="Search drug, species, buyer…"
+                placeholder="Search drug, species, buyer, practitioner…"
                 value={search} onChange={e => setSearch(e.target.value)} />
               {search && <button className="btn btn-sm btn-link text-muted px-2" onClick={() => setSearch("")}><i className="ti ti-x" /></button>}
             </div>
             <div className="d-flex gap-2 align-items-center flex-wrap">
-              <select className="form-select form-select-sm fs-13" style={{ width: 150 }}
-                value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}>
-                <option value="all">All categories</option>
-                {DRUG_CATEGORIES.map(c => <option key={c.value} value={c.value}>Category {c.label}</option>)}
-              </select>
               <select className="form-select form-select-sm fs-13" style={{ width: 180 }}
                 value={targetFilter} onChange={e => setTargetFilter(e.target.value)}>
                 <option value="all">All targets</option>
                 {PRESCRIPTION_TARGETS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
               {activeFilterCount > 0 && (
-                <button className="btn btn-sm btn-outline-danger"
-                  onClick={() => { setCategoryFilter("all"); setTargetFilter("all"); }}>
+                <button className="btn btn-sm btn-outline-danger" onClick={() => setTargetFilter("all")}>
                   <i className="ti ti-x me-1" />Clear
                 </button>
               )}
@@ -539,16 +568,12 @@ export default function VeterinaryEPrescriptionsList() {
                           {r.breed ? <span className="text-muted"> · {r.breed}</span> : null}
                         </td>
                         <td>
-                          <span className={`badge ${r.drug_category === "I"
-                            ? "bg-warning-transparent text-warning"
-                            : "bg-info-transparent text-info"}`}>
-                            {r.drug_category}
-                          </span>
-                        </td>
-                        <td>
                           <span className="badge bg-primary-transparent text-primary">
                             {r.prescription_target_display || r.prescription_target}
                           </span>
+                        </td>
+                        <td className="text-truncate" style={{ maxWidth: 160 }}>
+                          {r.practitioner_name || <span className="text-muted">—</span>}
                         </td>
                         <td className="text-truncate" style={{ maxWidth: 180 }}>{r.name_of_the_buyer}</td>
                         <td>{r.quantity_purchased || <span className="text-muted">—</span>}</td>
@@ -561,8 +586,8 @@ export default function VeterinaryEPrescriptionsList() {
                               <i className="ti ti-eye text-muted" />
                             </button>
                             <button className="btn btn-sm btn-icon btn-light" title="Print" onClick={() => printPrescription(r)}>
-  <i className="ti ti-printer text-success" />
-</button>
+                              <i className="ti ti-printer text-success" />
+                            </button>
                             <button className="btn btn-sm btn-icon btn-light" title="Edit" onClick={() => handleOpenEdit(r)}>
                               <i className="ti ti-edit text-primary" />
                             </button>
@@ -636,19 +661,31 @@ export default function VeterinaryEPrescriptionsList() {
                     value={form.date_of_prescription}
                     onChange={e => setForm({ ...form, date_of_prescription: e.target.value })} />
                 </Field>
-                <Field className="col-md-6" label="Drug Category *">
-                  <select className="form-select fs-13" required
-                    value={form.drug_category}
-                    onChange={e => setForm({ ...form, drug_category: e.target.value })}>
-                    {DRUG_CATEGORIES.map(c => <option key={c.value} value={c.value}>Category {c.label}</option>)}
-                  </select>
-                </Field>
                 <Field className="col-md-6" label="Prescription Target *">
                   <select className="form-select fs-13" required
                     value={form.prescription_target}
                     onChange={e => setForm({ ...form, prescription_target: e.target.value })}>
                     {PRESCRIPTION_TARGETS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </select>
+                </Field>
+              </div>
+
+              <SectionTitle icon="ti-stethoscope" title="Practitioner Details" />
+              <div className="row g-2">
+                <Field className="col-md-6" label="Practitioner Name">
+                  <input type="text" className="form-control fs-13"
+                    value={form.practitioner_name}
+                    onChange={e => setForm({ ...form, practitioner_name: e.target.value })} />
+                </Field>
+                <Field className="col-md-6" label="K.V.B No.">
+                  <input type="text" className="form-control fs-13"
+                    value={form.practitioner_kvb_no}
+                    onChange={e => setForm({ ...form, practitioner_kvb_no: e.target.value })} />
+                </Field>
+                <Field className="col-12" label="Contact">
+                  <input type="text" className="form-control fs-13"
+                    value={form.practitioner_contact}
+                    onChange={e => setForm({ ...form, practitioner_contact: e.target.value })} />
                 </Field>
               </div>
 
@@ -703,20 +740,6 @@ export default function VeterinaryEPrescriptionsList() {
                     value={form.dosage}
                     onChange={e => setForm({ ...form, dosage: e.target.value })} />
                 </Field>
-              </div>
-
-              <SectionTitle icon="ti-heart-rate-monitor" title="Treatment Metrics" />
-              <div className="row g-2">
-                <Field className="col-12" label="Clinical Use">
-                  <input type="text" className="form-control fs-13"
-                    value={form.clinical_use}
-                    onChange={e => setForm({ ...form, clinical_use: e.target.value })} />
-                </Field>
-                <Field className="col-md-6" label="Duration of Treatment">
-                  <input type="text" className="form-control fs-13"
-                    value={form.duration_of_treatment}
-                    onChange={e => setForm({ ...form, duration_of_treatment: e.target.value })} />
-                </Field>
                 <Field className="col-md-6" label="Withdrawal Period">
                   <input type="text" className="form-control fs-13"
                     value={form.withdrawal_period}
@@ -737,6 +760,21 @@ export default function VeterinaryEPrescriptionsList() {
                     value={form.side_effect}
                     onChange={e => setForm({ ...form, side_effect: e.target.value })} />
                 </Field>
+              </div>
+
+              <SectionTitle icon="ti-heart-rate-monitor" title="Treatment Metrics" />
+              <div className="row g-2">
+                <Field className="col-12" label="Clinical Use">
+                  <input type="text" className="form-control fs-13"
+                    value={form.clinical_use}
+                    onChange={e => setForm({ ...form, clinical_use: e.target.value })} />
+                </Field>
+                <Field className="col-md-6" label="Duration of Treatment">
+                  <input type="text" className="form-control fs-13"
+                    value={form.duration_of_treatment}
+                    onChange={e => setForm({ ...form, duration_of_treatment: e.target.value })} />
+                </Field>
+                
               </div>
 
               <SectionTitle icon="ti-user" title="Buyer Credentials" />
@@ -790,10 +828,10 @@ export default function VeterinaryEPrescriptionsList() {
             </button>
           )}
           {mode === "view" && selected && (
-  <button type="button" className="btn btn-sm btn-outline-success" onClick={() => printPrescription(selected)}>
-    <i className="ti ti-printer me-1" />Print
-  </button>
-)}
+            <button type="button" className="btn btn-sm btn-outline-success" onClick={() => printPrescription(selected)}>
+              <i className="ti ti-printer me-1" />Print
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -834,9 +872,15 @@ function ViewDetails({ item, fmtDate }: { item: any; fmtDate: (s?: string) => st
       <SectionTitle icon="ti-clipboard-list" title="Prescription Information" />
       <div className="row g-3">
         <div className="col-6"><ViewRow label="DATE" value={fmtDate(item.date_of_prescription)} /></div>
-        <div className="col-6"><ViewRow label="DRUG CATEGORY" value={`Category ${item.drug_category}`} /></div>
         <div className="col-6"><ViewRow label="TARGET" value={item.prescription_target_display || item.prescription_target} /></div>
         <div className="col-6"><ViewRow label="RECORDED BY" value={item.user_name} /></div>
+      </div>
+
+      <SectionTitle icon="ti-stethoscope" title="Practitioner Details" />
+      <div className="row g-3">
+        <div className="col-6"><ViewRow label="PRACTITIONER NAME" value={item.practitioner_name} /></div>
+        <div className="col-6"><ViewRow label="K.V.B NO." value={item.practitioner_kvb_no} /></div>
+        <div className="col-6"><ViewRow label="CONTACT" value={item.practitioner_contact} /></div>
       </div>
 
       <SectionTitle icon="ti-paw" title="Animal Details" />
@@ -854,16 +898,17 @@ function ViewDetails({ item, fmtDate }: { item: any; fmtDate: (s?: string) => st
         <div className="col-4"><ViewRow label="QTY" value={item.quantity_purchased} /></div>
         <div className="col-4"><ViewRow label="VOLUME" value={item.drug_volume} /></div>
         <div className="col-12"><ViewRow label="DOSAGE" value={item.dosage} /></div>
+         <div className="col-6"><ViewRow label="WITHDRAWAL PERIOD" value={item.withdrawal_period} /></div>
+        <div className="col-6"><ViewRow label="STORAGE" value={item.storage_condition} /></div>
+        <div className="col-6"><ViewRow label="EXPIRY" value={item.expiry_date ? fmtDate(item.expiry_date) : ""} /></div>
+        <div className="col-12"><ViewRow label="SIDE EFFECT" value={item.side_effect} /></div>
       </div>
 
       <SectionTitle icon="ti-heart-rate-monitor" title="Treatment Metrics" />
       <div className="row g-3">
         <div className="col-12"><ViewRow label="CLINICAL USE" value={item.clinical_use} /></div>
         <div className="col-6"><ViewRow label="DURATION" value={item.duration_of_treatment} /></div>
-        <div className="col-6"><ViewRow label="WITHDRAWAL PERIOD" value={item.withdrawal_period} /></div>
-        <div className="col-6"><ViewRow label="STORAGE" value={item.storage_condition} /></div>
-        <div className="col-6"><ViewRow label="EXPIRY" value={item.expiry_date ? fmtDate(item.expiry_date) : ""} /></div>
-        <div className="col-12"><ViewRow label="SIDE EFFECT" value={item.side_effect} /></div>
+       
       </div>
 
       <SectionTitle icon="ti-user" title="Buyer Credentials" />

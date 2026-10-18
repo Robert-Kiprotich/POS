@@ -1,3 +1,20 @@
-# Django migrations
+# Node.js dependencies
+node_modules/
+**/node_modules/
+
+# Django migrations (as requested)
 **/migrations/*.py
 !**/migrations/__init__.py
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual environments
+venv/
+.venv/

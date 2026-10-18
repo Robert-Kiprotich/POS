@@ -3695,6 +3695,12 @@ class SupplyViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         p = self.request.query_params
+        qs = (
+            Supply.objects
+            .select_related("supplier", "received_by", "purchase_invoice")
+            .prefetch_related("items__product", "purchase_invoice__payments_made")
+            .order_by("-supply_date", "-id")
+        )
         if p.get("supplier"):
             qs = qs.filter(supplier_id=p["supplier"])
         if p.get("status"):
@@ -3703,6 +3709,7 @@ class SupplyViewSet(viewsets.ModelViewSet):
             qs = qs.filter(supply_date__gte=p["date_from"])
         if p.get("date_to"):
             qs = qs.filter(supply_date__lte=p["date_to"])
+        
         return qs.distinct()
 
     @staticmethod

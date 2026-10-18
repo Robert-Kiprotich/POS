@@ -57,11 +57,17 @@ function rangeNoun(rangeType: string) {
     default:       return "";
   }
 }
-
+const MIX: Record<string, string> = {
+  "#E41F07": "#FFA201",  // red    -> orange
+  "#0092E4": "#8B5CF6",  // blue   -> purple
+  "#8B5CF6": "#FF6B9D",  // purple -> pink
+  "#10B981": "#0092E4",  // green  -> blue
+  "#F59E0B": "#E41F07",  // amber  -> red
+  "#DC2626": "#F59E0B",  // red    -> amber
+  "#0EA5E9": "#10B981",  // sky    -> green
+};
 /* ───────── STEP 1: KpiTile component ───────── */
-function KpiTile({
-  col, label, value, color, bg, icon, footer,
-}: {
+function KpiTile({ col, label, value, color, bg, icon, footer }: {
   col: string; label: string; value: ReactNode;
   color: string; bg: string; icon: string; footer?: ReactNode;
 }) {
@@ -70,7 +76,19 @@ function KpiTile({
       <div className="card flex-fill border-0 shadow-sm" style={{ borderTop: `3px solid ${color}` }}>
         <div className="card-body position-relative">
           <p className="fw-medium mb-1 text-muted">{label}</p>
-          <h4 className="mb-3 text-dark" style={{ fontSize: "1.6rem" }}>{value}</h4>
+                    <h4
+            className="mb-3 fw-bold"
+            style={{
+              fontSize: "1.6rem",
+              backgroundImage: `linear-gradient(90deg, ${color}, ${MIX[color] ?? "#8B5CF6"})`,
+              WebkitBackgroundClip: "text",
+              backgroundClip: "text",
+              WebkitTextFillColor: "transparent",
+              display: "inline-block",
+            }}
+          >
+            {value}
+          </h4>
           <div className="d-flex align-items-center gap-2 flex-wrap">{footer}</div>
           <div className="custom-card-icon">
             <div className="avatar avatar-rounded avatar-lg"
@@ -364,8 +382,35 @@ title="Set custom date range"
                     {!loading && pctBadge(d?.wholesale_sales?.change_pct ?? 0)}
                     <p className="text-muted mb-0 fs-13">{loading ? "" : `${d?.wholesale_sales?.count ?? 0} sale(s) · ${pctLabel}`}</p>
                   </>} />
+                                  {showProfit && (
+                  <KpiTile col="col-xl-3 col-sm-6 d-flex" label={`${noun} Net Profit`} color="#10B981" bg="#D1FAE5" icon="ti-trending-up"
+                    value={loading ? "—" : currency(d?.profit?.total)}
+                    footer={
+                      <div className="w-100">
+                        <div className="d-flex align-items-center gap-2 flex-wrap">
+                          {trendFooter(d?.profit?.change_pct)}
+                        </div>
+                        {!loading && (
+                          <div className="fs-12 text-muted mt-2 border-top pt-2">
+                            <div className="d-flex justify-content-between">
+                              <span>Gross profit</span><span>{currency(d?.profit?.gross)}</span>
+                            </div>
+                            <div className="d-flex justify-content-between">
+                              <span>Petty cash</span><span className="text-danger">−{currency(d?.profit?.petty_cash)}</span>
+                            </div>
+                            <div className="d-flex justify-content-between">
+                              <span>Business expenses</span><span className="text-danger">−{currency(d?.profit?.business_expenses)}</span>
+                            </div>
+                            <div className="d-flex justify-content-between">
+                              <span>Salaries</span><span className="text-danger">−{currency(d?.profit?.salaries)}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    } />
+                )}
               </div>
-
+                    
               {/* Credit sales */}
               <div className="row g-3 mb-4">
                 <KpiTile col="col-xl-6 col-sm-6 d-flex" label={`${noun} Credit Sales · Pending`}
@@ -803,11 +848,7 @@ title="Set custom date range"
           <p className="mb-md-0 mb-1">
             Copyright © <Link to="#" className="link-primary text-decoration-underline">Super POS</Link>
           </p>
-          <div className="d-flex align-items-center gap-2 footer-links justify-content-center justify-content-md-end">
-            <Link to="#">About</Link>
-            <Link to="#">Terms</Link>
-            <Link to="#">Contact Us</Link>
-          </div>
+          
         </footer>
       </div>
     </>

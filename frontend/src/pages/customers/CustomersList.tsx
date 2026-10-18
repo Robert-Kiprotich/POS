@@ -1,10 +1,12 @@
 
 import { useState, useEffect, useCallback } from "react";
+
 import * as XLSX from "xlsx";
+import html2canvas from "html2canvas";
+import { jsPDF } from "jspdf";
 import API from "../../services/api";
 import CustomerFormOffcanvas from "./customerModal";
-import { openStatement } from "../../../src/utils/invoiveTemplate";
-
+import { openStatement, buildStatementHtml } from "../../../src/utils/invoiveTemplate";
 function fmtDate(iso: string) {
   if (!iso) return "";
 
@@ -279,31 +281,60 @@ function previewStatement(customer: any, allCustomers: any[]) {
 function printStatement(customer: any, allCustomers: any[]) {
   openStatement(buildStatement(customer, allCustomers), "print");
 }
-function downloadStatement(customer: any, allCustomers: any[]) {
+async function downloadStatement(customer: any, allCustomers: any[]) {
   const s = buildStatement(customer, allCustomers);
-  const aoa: any[][] = [
-    ["Customer Statement"],
-    ["Customer", s.name],
-    ["Business", s.business],
-    ["Phone", s.phone],
-    ["Email", s.email],
-    [],
-    ["Date", "Invoice", "Type", "Total", "Paid", "Balance"],
-    ...s.sales.map((x: any) => [
-      x.created_at ? fmtDate(x.created_at) : "",
-      x.order_number || "",
-      x.sale_type || "",
-      Number(x.total_amount || 0),
-      Number(x.amount_paid || 0),
-      Number(x.balance_due || 0),
-    ]),
-    [],
-    ["", "", "Totals", s.totalAmount, s.totalPaid, s.totalBalance],
-  ];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Statement");
-  const safe = (s.name || "customer").replace(/[^a-z0-9]+/gi, "_");
-  XLSX.writeFile(wb, `statement_${safe}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+
+  // Render the same HTML the preview/print uses, in a hidden A4-width frame
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText =
+    "position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;background:#fff;";
+  document.body.appendChild(iframe);
+
+  try {
+    await new Promise<void>((resolve) => {
+      iframe.onload = () => resolve();
+      iframe.srcdoc = buildStatementHtml(s, false);
+    });
+    const body = iframe.contentDocument!.body;
+
+    const canvas = await html2canvas(body, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: "#ffffff",
+      windowWidth: 794,
+      windowHeight: body.scrollHeight,
+    });
+
+    // Cut the tall canvas into A4 pages
+    const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+    const margin = 10;
+    const imgW = 210 - margin * 2;
+    const pxPerMm = canvas.width / imgW;
+    const pageH = (297 - margin * 2) * pxPerMm;
+
+    let y = 0;
+    let first = true;
+    while (y < canvas.height) {
+      const sliceH = Math.min(pageH, canvas.height - y);
+      const slice = document.createElement("canvas");
+      slice.width = canvas.width;
+      slice.height = sliceH;
+      slice.getContext("2d")!.drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+
+      if (!first) pdf.addPage();
+      pdf.addImage(slice.toDataURL("image/jpeg", 0.95), "JPEG", margin, margin, imgW, sliceH / pxPerMm);
+      y += sliceH;
+      first = false;
+    }
+
+    const safe = (s.name || "customer").replace(/[^a-z0-9]+/gi, "_");
+    pdf.save(`statement_${safe}_${new Date().toISOString().slice(0, 10)}.pdf`);
+  } catch (err) {
+    console.error("Could not create the statement PDF:", err);
+    alert("Could not create the PDF. Please try again.");
+  } finally {
+    iframe.remove();
+  }
 }
 export default function CustomersList() {
   const [customers, setCustomers] = useState<any[]>([]);
@@ -948,12 +979,12 @@ export default function CustomersList() {
   >
     <i className="ti ti-file-search" />
   </button>
-  <button
+   <button
     className="btn btn-sm btn-outline-success py-1 px-2 fs-11 me-1"
-    title="Download statement (Excel)"
+    title="Download statement (PDF)"
     onClick={() => downloadStatement(row.customer, customers)}
   >
-    <i className="ti ti-download" />
+    <i className="ti ti-file-type-pdf" />
   </button>
   <button
     className="btn btn-sm btn-outline-secondary py-1 px-2 fs-11"
