@@ -427,7 +427,7 @@ title="Set custom date range"
 
               {/* Everything else */}
               <div className="row g-3 mb-4">
-                {showProfit && (
+                {/* {showProfit && (
                   <KpiTile col="col-xl-4 col-sm-6 d-flex" label={`${noun} Net Profit`} color="#10B981" bg="#D1FAE5" icon="ti-trending-up"
                     value={loading ? "—" : currency(d?.profit?.total)}
                     footer={
@@ -453,7 +453,7 @@ title="Set custom date range"
                         )}
                       </div>
                     } />
-                )}
+                )} */}
 
                 <KpiTile col="col-xl-4 col-sm-6 d-flex" label="Items Sold" color="#0092E4" bg="#E0F2FE" icon="ti-package"
                   value={loading ? "—" : d?.items_sold?.total} footer={trendFooter(d?.items_sold?.change_pct)} />

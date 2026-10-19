@@ -257,13 +257,12 @@ function printPrescription(item: any) {
     field("Quantity Purchased", item.quantity_purchased) +
     field("Drug Volume", item.drug_volume) +
     field("Expiry Date", item.expiry_date ? fmtDate(item.expiry_date) : "") +
-    field("Dosage", item.dosage, true) +
-    field("Storage Condition", item.storage_condition, true) +
-    field("Side Effects", item.side_effect, true))}
-
+    field("Dosage", item.dosage) +
+    field("Storage Condition", item.storage_condition) +
+    field("Side Effects", item.side_effect))}
   ${section("Treatment",
-    field("Clinical Use", item.clinical_use, true) +
-    field("Duration of Treatment", item.duration_of_treatment, true))}
+    field("Clinical Use", item.clinical_use) +
+    field("Duration of Treatment", item.duration_of_treatment))}
 
   <div class="sec warn">
     <div class="sec-t">Withdrawal Period</div>

@@ -7,6 +7,9 @@ const BUSINESS = {
   logo,
 };
 const ACCENT = "#E41F07";
+const TAGLINE =
+  "Dealers in All Types Of Agro-chemicals and Veterinary Products, Farm Tools, Fertilizers and Poultry Products";
+const PAYMENT = "Paybill 247247 &nbsp;&nbsp; Account 232009";
 
 export const fmtDate = (iso?: string) =>
   iso ? new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "";
@@ -23,8 +26,10 @@ const INVOICE_CSS = `
   body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; line-height: 1.45;
          color: #1f2937; background: #fff;
          -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+   .head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 16px;
           padding-bottom: 14px; border-bottom: 3px solid ${ACCENT}; }
+  .tagline { flex-basis: 100%; width: 100%; margin-top: -6px; font-size: 11px; font-weight: 600;
+             color: #4b5563; }
   .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
   .brand img { display: block; max-width: 100px; max-height: 50px; width: auto; height: auto; object-fit: contain; flex-shrink: 0; }
   .brand h1 { margin: 0 0 3px; font-size: 17px; letter-spacing: .3px; }
@@ -61,6 +66,7 @@ const INVOICE_CSS = `
   .sign { display: flex; gap: 40px; margin-top: 50px; break-inside: avoid; page-break-inside: avoid; }
   .sign div { flex: 1; border-top: 1px solid #111; padding-top: 4px; text-align: center; font-size: 11px; color: #4b5563; }
   .foot { margin-top: 30px; text-align: center; color: #9ca3af; font-size: 10px; border-top: 1px solid #e5e7eb; padding-top: 10px; }
+    .pay { font-size: 12px; font-weight: 700; color: #111; margin-bottom: 6px; }
     .unpaid { margin-top: 22px; break-inside: avoid; page-break-inside: avoid; }
   .unpaid h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: #6b7280; }
   .unpaid table th { background: #f3f4f6 !important; color: #374151 !important; }
@@ -125,6 +131,7 @@ export function buildInvoiceHtml(inv: any) {
       <div><h1>${esc(BUSINESS.name)}</h1>${BUSINESS.lines.map(l => `<p>${esc(l)}</p>`).join("")}</div>
     </div>
     <div class="title"><h2>${inv.invoice_type === "credit" ? "CREDIT INVOICE" : "INVOICE"}</h2><div>No. ${esc(docNo)}</div></div>
+    <div class="tagline">${TAGLINE}</div>
   </div>
 
   <div class="meta">
@@ -238,6 +245,7 @@ export function buildStatementHtml(s: any, preview = false) {
       <div><h1>${esc(BUSINESS.name)}</h1>${BUSINESS.lines.map(l => `<p>${esc(l)}</p>`).join("")}</div>
     </div>
     <div class="title"><h2>STATEMENT</h2><div>Customer account</div></div>
+    <div class="tagline">${TAGLINE}</div>
   </div>
 
   <div class="meta">
@@ -280,7 +288,7 @@ export function buildStatementHtml(s: any, preview = false) {
     </div>
   </div>
 
-  <div class="foot">Thank you for your business.</div>
+<div class="foot"><div class="pay">Payment details: ${PAYMENT}</div>Thank you for your business.</div>
    </div>
 </body></html>`;
 }
