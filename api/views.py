@@ -24,6 +24,7 @@ from .branch_scope import (scope_by_branch, check_branch_access, visible_branch_
                            sees_all_branches, user_branch_id)
 from .utils import get_head_office_branch
 import uuid
+
 from django.db import IntegrityError
 from django.utils.dateparse import parse_datetime
 
@@ -253,7 +254,7 @@ class SaleViewSet(viewsets.ModelViewSet):
         """Keep the invoice(s) linked to this sale in step with its payments."""
         paid = sale.amount_paid or Decimal("0.00")
         total = sale.total_amount or Decimal("0.00")
-        balance = max(total - paid, Decimal("0.00"))
+        balance = total - paid
 
         for inv in SalesInvoice.objects.filter(sale=sale).exclude(
             status=SalesInvoice.Status.CANCELLED
@@ -336,17 +337,24 @@ class SaleViewSet(viewsets.ModelViewSet):
                     sale.save(update_fields=["sale_type"])
 
                 if not sale.payments.exists():
+                    is_retail = sale.sale_type == "Retail"
+                    remaining = sale.total_amount          # only used for Retail
                     for p in request.data.get("payments", []):
                         amount = Decimal(str(p.get("amount") or 0))
-                        if amount > 0:
-                            Payment.objects.create(
-                                sale=sale,
-                                method=p.get("method"),
-                                amount=amount,
-                                reference=p.get("reference", ""),
-                                received_by_id=p.get("received_by") or request.user.id,
-                            )
-
+                        if amount <= 0:
+                            continue
+                        if is_retail:
+                            if remaining <= 0:
+                                break
+                            amount = min(amount, remaining)   # change is given back, not recorded
+                            remaining -= amount
+                        Payment.objects.create(
+                            sale=sale,
+                            method=p.get("method"),
+                            amount=amount,
+                            reference=p.get("reference", ""),
+                            received_by_id=p.get("received_by") or request.user.id,
+                        )
                 # Stamp offline metadata. update() bypasses auto_now_add, so reports
                 # (which use created_at / paid_at) show the real sale time, not the sync time.
                 if client_uuid or sold_at:
@@ -387,17 +395,31 @@ class SaleViewSet(viewsets.ModelViewSet):
         if date_to:
             qs = qs.filter(created_at__date__lte=date_to)
         return qs
-
     @action(detail=True, methods=["post"])
     def add_payment(self, request, pk=None):
         sale = self.get_object()
+
+        # Retail sales can't be overpaid (give change instead)
+        if sale.sale_type == "Retail":
+            due = sale.total_amount - sale.amount_paid
+            if due <= 0:
+                return Response({"error": "This retail sale is already fully paid."},
+                                status=status.HTTP_400_BAD_REQUEST)
+            try:
+                amt = Decimal(str(request.data.get("amount") or 0))
+            except InvalidOperation:
+                return Response({"error": "Enter a valid amount."},
+                                status=status.HTTP_400_BAD_REQUEST)
+            if amt > due:
+                return Response({"error": f"Retail sales can't be overpaid. Balance is {due}."},
+                                status=status.HTTP_400_BAD_REQUEST)
+
         serializer = PaymentSerializer(data={**request.data, "sale": sale.id})
         serializer.is_valid(raise_exception=True)
         with transaction.atomic():
             serializer.save(received_by=request.user if request.user.is_authenticated else None)
             sale = self._sync_payment_status(sale)
         return Response(SaleSerializer(sale, context=self.get_serializer_context()).data)
-    @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
         """POST /api/pos/sales/{id}/cancel/ — cancels a sale and restocks its items at the sale's branch."""
         sale = self.get_object()
@@ -461,6 +483,7 @@ class SaleViewSet(viewsets.ModelViewSet):
         if request.query_params.get("date_to"):
             qs = qs.filter(created_at__date__lte=request.query_params["date_to"])
         zero = Decimal("0.00")
+        outstanding=Coalesce(Sum(F("total_amount") - F("amount_paid")), zero),
         rows = (qs.exclude(branch__isnull=True).values("branch")
                 .annotate(
                     total_revenue=Coalesce(Sum("total_amount", filter=Q(status=Sale.Status.COMPLETED)), zero),
@@ -1385,18 +1408,14 @@ def admin_dashboard(request):
         created_at__date__gte=prev_start, created_at__date__lte=prev_end
     ).count()
 
-    # ---------- Outstanding ----------
     outstanding_qs = _b(
-        Sale.objects
-        .exclude(status=Sale.Status.CANCELLED)
-        .filter(total_amount__gt=F("amount_paid"))
+        Sale.objects.exclude(status=Sale.Status.CANCELLED)
     )
     outstanding_total = outstanding_qs.aggregate(
         t=Coalesce(Sum(F("total_amount") - F("amount_paid")), Decimal("0.00"))
     )["t"]
-    outstanding_count = outstanding_qs.count()
-
-    # ---------- Cash in till ----------
+    outstanding_count = outstanding_qs.filter(total_amount__gt=F("amount_paid")).count()
+        # ---------- Cash in till ----------
     cash_today = _b(
         Payment.objects.filter(paid_at__date=timezone.localdate(), method="cash"),
         "sale__branch_id",
@@ -3383,18 +3402,7 @@ class BusinessPaymentViewSet(viewsets.ModelViewSet):
         })
 
 class StoreViewSet(viewsets.ModelViewSet):
-    """
-    The central store. Stock is received here, then moved to Head Office.
-
-    GET   /api/pos/store/                          list (?search=, ?low_stock=true, ?in_stock=true)
-    POST  /api/pos/store/                          start tracking a product in the store (quantity 0)
-    PATCH /api/pos/store/{id}/                     change reorder level
-    POST  /api/pos/store/receive/                  { product, quantity, note? }
-    POST  /api/pos/store/move_to_head_office/      { product, quantity, note? }
-                                                   or { items: [{product, quantity}, ...], note? }
-    POST  /api/pos/store/{id}/write_off/           { quantity, reason: "damaged"|"expired", note? }
-    GET   /api/pos/store/stats/
-    """
+    
     queryset = StoreStock.objects.select_related("product", "product__category").all()
     serializer_class = StoreStockSerializer
     permission_classes = [IsAuthenticated]
@@ -3403,8 +3411,18 @@ class StoreViewSet(viewsets.ModelViewSet):
     search_fields = ["product__name", "product__item_number"]
     ordering_fields = ["quantity", "product__name", "updated_at"]
 
+    BUCKETS = {"damaged": "damaged_quantity", "expired": "expired_quantity", "returned": "returned_quantity"}
+    ALLOWED = ({("good", "damaged"), ("good", "expired")}
+            | {(b, "good") for b in BUCKETS} | {(b, "disposed") for b in BUCKETS})
+    MOVE_TYPE = {"damaged": "damaged", "expired": "expired", "disposed": "disposed", "good": "adjustment"}
+
     def get_queryset(self):
         qs = super().get_queryset()
+        p = self.request.query_params
+        latest = (SupplyItem.objects
+              .filter(product=OuterRef("product"), supply__status=Supply.Status.RECEIVED)
+              .order_by("-supply__supply_date", "-supply__id"))
+        qs = qs.annotate(last_supplier=Subquery(latest.values("supply__supplier__name")[:1]))
         p = self.request.query_params
         if p.get("low_stock", "").lower() in ("1", "true", "yes"):
             qs = qs.filter(quantity__lte=F("reorder_level"))
@@ -3430,13 +3448,71 @@ class StoreViewSet(viewsets.ModelViewSet):
         return qty
 
     @staticmethod
-    def _log(product, movement_type, change, balance, note, user):
+    def _log(product, movement_type, change, balance, note, user,
+            confirmed_by=None, authorised_by=None):
         return StoreMovement.objects.create(
             product=product, movement_type=movement_type, quantity_change=change,
             balance_after=balance, note=note, created_by=user,
+            confirmed_by=confirmed_by, authorised_by=authorised_by,
+            unit_cost=product.cost_price,
         )
+    @action(detail=True, methods=["post"])
+    def change_status(self, request, pk=None):
+        """body: { from_status, to_status, quantity, confirmed_by, note? }"""
+        frm, to = request.data.get("from_status"), request.data.get("to_status")
+        if (frm, to) not in self.ALLOWED:
+            return Response({"error": "That status change isn't allowed."}, status=400)
+        try:
+            qty = self._qty(request.data.get("quantity"))
+            confirmed_by = self._pick_user(request.data.get("confirmed_by"), "confirmed this change")
+        except ValueError as e:
+            return Response({"error": str(e)}, status=400)
+        note = (request.data.get("note") or "").strip()
 
-    # ---------- actions ----------
+        with transaction.atomic():
+            row = StoreStock.objects.select_for_update().get(pk=self.get_object().pk)
+            field = lambda s: "quantity" if s == "good" else self.BUCKETS[s]
+            have = getattr(row, field(frm))
+            if have < qty:
+                return Response({"error": f"Only {have} {frm} unit(s) available."}, status=400)
+            setattr(row, field(frm), have - qty)
+            if to != "disposed":
+                setattr(row, field(to), getattr(row, field(to)) + qty)
+            row.save(update_fields=["quantity", *self.BUCKETS.values(), "updated_at"])
+
+            change = -qty if (frm == "good" or to == "disposed") else qty
+            self._log(row.product, self.MOVE_TYPE[to], change, row.quantity,
+                    f"{frm.title()} → {to.title()}" + (f": {note}" if note else ""),
+                    self._user(request), confirmed_by=confirmed_by)
+        return Response(self.get_serializer(row).data)
+
+    @action(detail=False, methods=["post"])
+    def receive_return(self, request):
+        """body: { product, quantity, confirmed_by, note? } – goods come back into the store for inspection."""
+        try:
+            qty = self._qty(request.data.get("quantity"))
+            confirmed_by = self._pick_user(request.data.get("confirmed_by"), "confirmed this return")
+        except ValueError as e:
+            return Response({"error": str(e)}, status=400)
+        product = get_object_or_404(Product, pk=request.data.get("product"))
+        note = (request.data.get("note") or "").strip()
+        with transaction.atomic():
+            row, _ = StoreStock.objects.select_for_update().get_or_create(
+                product=product, defaults={"quantity": 0})
+            row.returned_quantity += qty
+            row.save(update_fields=["returned_quantity", "updated_at"])
+            self._log(product, "returned", qty, row.quantity,
+                    "Returned: held for inspection" + (f": {note}" if note else ""),
+                    self._user(request), confirmed_by=confirmed_by)
+        return Response(self.get_serializer(row).data, status=201)    
+    @staticmethod
+    def _pick_user(value, role):
+        if not value:
+            raise ValueError(f"Select who {role}.")
+        user = User.objects.filter(pk=value, is_active=True).first()
+        if not user:
+            raise ValueError("The selected user was not found.")
+        return user
     @action(detail=False, methods=["post"])
     def receive(self, request):
         """Add stock into the store (e.g. a delivery from a supplier)."""
@@ -3456,7 +3532,15 @@ class StoreViewSet(viewsets.ModelViewSet):
             self._log(product, StoreMovement.MovementType.RECEIVED, qty, row.quantity,
                       note or "Received into store", self._user(request))
         return Response(self.get_serializer(row).data, status=status.HTTP_201_CREATED)
-
+    @action(detail=False, methods=["get"])
+    def users(self, request):
+        rows = (User.objects.filter(is_active=True)
+                .order_by("firstname", "username")
+                .values("id", "username", "firstname", "lastname"))
+        return Response([
+            {"id": u["id"], "name": f"{u['firstname']} {u['lastname']}".strip() or u["username"]}
+            for u in rows
+        ])
     @action(detail=False, methods=["post"])
     def move_to_head_office(self, request):
         """
@@ -3475,6 +3559,7 @@ class StoreViewSet(viewsets.ModelViewSet):
         moved = []
 
         try:
+            authorised_by = self._pick_user(request.data.get("authorised_by"), "authorised this move")
             with transaction.atomic():
                 for line in items:
                     qty = self._qty(line.get("quantity"))
@@ -3494,8 +3579,8 @@ class StoreViewSet(viewsets.ModelViewSet):
                     row.quantity -= qty
                     row.save(update_fields=["quantity", "updated_at"])
                     self._log(product, StoreMovement.MovementType.TO_HEAD_OFFICE, -qty, row.quantity,
-                              note or f"Moved to {head_office.name}", user)
-
+                              note or f"Moved to {head_office.name}", user,
+                              authorised_by=authorised_by)
                     # Head Office side
                     hq, _ = BranchStock.objects.select_for_update().get_or_create(
                         branch=head_office, product=product, defaults={"stock_quantity": 0}
@@ -3517,29 +3602,64 @@ class StoreViewSet(viewsets.ModelViewSet):
         return Response({"moved_to": head_office.name, "lines": len(moved), "items": moved},
                         status=status.HTTP_201_CREATED)
 
-    @action(detail=True, methods=["post"])
-    def write_off(self, request, pk=None):
-        """Remove damaged or expired units from the store."""
-        reason = request.data.get("reason")
-        if reason not in (StoreMovement.MovementType.DAMAGED, StoreMovement.MovementType.EXPIRED):
-            return Response({"error": "reason must be 'damaged' or 'expired'."},
-                            status=status.HTTP_400_BAD_REQUEST)
+    @action(detail=False, methods=["post"])
+    def record_issue(self, request):
+        """body: { product, issue_type: damaged|expired|returned, quantity, confirmed_by, note? }"""
+        kind = request.data.get("issue_type")
+        if kind not in self.BUCKETS:
+            return Response({"error": "Choose damaged, expired or returned."}, status=400)
         try:
             qty = self._qty(request.data.get("quantity"))
+            confirmed_by = self._pick_user(request.data.get("confirmed_by"), "confirmed this")
         except ValueError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": str(e)}, status=400)
+        product = get_object_or_404(Product, pk=request.data.get("product"))
+        note = (request.data.get("note") or "").strip()
 
         with transaction.atomic():
-            row = StoreStock.objects.select_for_update().select_related("product").get(pk=self.get_object().pk)
-            if row.quantity < qty:
-                return Response({"error": f"Only {row.quantity} in the store."},
-                                status=status.HTTP_400_BAD_REQUEST)
-            row.quantity -= qty
-            row.save(update_fields=["quantity", "updated_at"])
-            self._log(row.product, reason, -qty, row.quantity,
-                      (request.data.get("note") or "").strip(), self._user(request))
-        return Response(self.get_serializer(row).data)
+            row, _ = StoreStock.objects.select_for_update().get_or_create(
+                product=product, defaults={"quantity": 0})
+            if kind == "returned":
+                row.returned_quantity += qty          # comes back in, held for inspection
+                change = qty
+            else:
+                if row.quantity < qty:
+                    return Response({"error": f"Only {row.quantity} good unit(s) in the store."}, status=400)
+                row.quantity -= qty                   # leaves good stock...
+                field = self.BUCKETS[kind]
+                setattr(row, field, getattr(row, field) + qty)   # ...into the issue bucket
+                change = -qty
+            row.save(update_fields=["quantity", *self.BUCKETS.values(), "updated_at"])
+            self._log(product, kind, change, row.quantity,
+                    f"{kind.title()}" + (f": {note}" if note else ""),
+                    self._user(request), confirmed_by=confirmed_by)
+        return Response(self.get_serializer(row).data, status=201)
 
+    @action(detail=False, methods=["post"])
+    def adjust_price(self, request):
+        """body: { product, cost_price, confirmed_by, note? }"""
+        try:
+            new_cost = _parse_price(request.data.get("cost_price"))
+            confirmed_by = self._pick_user(request.data.get("confirmed_by"), "confirmed this change")
+        except ValueError as e:
+            return Response({"error": str(e)}, status=400)
+        if new_cost is None:
+            return Response({"error": "Enter the new price."}, status=400)
+        product = get_object_or_404(Product, pk=request.data.get("product"))
+        old = product.cost_price
+        if new_cost == old:
+            return Response({"error": "That is already the current price."}, status=400)
+        note = (request.data.get("note") or "").strip()
+
+        with transaction.atomic():
+            product.cost_price = new_cost
+            product.save(update_fields=["cost_price", "updated_at"])
+            row, _ = StoreStock.objects.get_or_create(product=product, defaults={"quantity": 0})
+            self._log(product, StoreMovement.MovementType.ADJUSTMENT, 0, row.quantity,
+                    f"Cost price {old} → {new_cost}" + (f": {note}" if note else ""),
+                    self._user(request), confirmed_by=confirmed_by)
+        return Response(self.get_serializer(row).data)
+        
     @action(detail=False, methods=["get"])
     def stats(self, request):
         qs = self.get_queryset()
@@ -3548,18 +3668,28 @@ class StoreViewSet(viewsets.ModelViewSet):
                 F("quantity") * F("product__cost_price"),
                 output_field=DecimalField(max_digits=14, decimal_places=2))), Decimal("0.00"))
         )["t"]
+        issues = qs.aggregate(
+    d=Coalesce(Sum("damaged_quantity"), 0), e=Coalesce(Sum("expired_quantity"), 0),
+    r=Coalesce(Sum("returned_quantity"), 0),
+    v=Coalesce(Sum(ExpressionWrapper(
+        (F("damaged_quantity") + F("expired_quantity") + F("returned_quantity")) * F("product__cost_price"),
+        output_field=DecimalField(max_digits=14, decimal_places=2))), Decimal("0.00")))
+
         return Response({
             "products": qs.count(),
             "units_in_store": qs.aggregate(t=Coalesce(Sum("quantity"), 0))["t"],
             "stock_value": value,
             "low_stock": qs.filter(quantity__gt=0, quantity__lte=F("reorder_level")).count(),
             "out_of_stock": qs.filter(quantity__lte=0).count(),
+            # ...and in the Response:
+"damaged_units": issues["d"], "expired_units": issues["e"],
+"returned_units": issues["r"], "issue_value": issues["v"],
         })
 
 
 class StoreMovementViewSet(viewsets.ReadOnlyModelViewSet):
     """GET /api/pos/store-movements/ — history of the store (?product=, ?movement_type=, ?date_from=, ?date_to=)"""
-    queryset = StoreMovement.objects.select_related("product", "created_by").all()
+    queryset = StoreMovement.objects.select_related("product", "created_by","confirmed_by", "authorised_by").all()
     serializer_class = StoreMovementSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]

@@ -252,6 +252,17 @@ const userName = (u: any) => `${u.firstname || ""} ${u.lastname || ""}`.trim() |
 
     navigate(location.pathname, { replace: true, state: null });
   }, [location.state, suppliers]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Coming from an invoice: open that supply and its payment form
+  useEffect(() => {
+    const st = location.state as any;
+    if (!st?.openSupplyId || supplies.length === 0) return;
+    const s = supplies.find(x => x.id === st.openSupplyId);
+    if (s) {
+      openView(s);
+      if (st.openPayment) setShowPaymentForm(true);
+    }
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, supplies]); // eslint-disable-line react-hooks/exhaustive-deps
   const activeFilterCount = [supplierFilter !== "all", statusFilter !== "all", !!dateFrom, !!dateTo].filter(Boolean).length;
   function resetFilters() {
     setSupplierFilter("all"); setStatusFilter("all"); setDateFrom(""); setDateTo(""); setSearch("");

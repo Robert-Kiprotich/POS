@@ -3,6 +3,8 @@ import * as XLSX from "xlsx";
 import API from "../../services/api";
 import logo from "../../assets/img/Logo.svg";
 import { printHtml } from "../../utils/printHtml";
+import { useNavigate } from "react-router";
+import SaleDetailOffcanvas from "../sales/SalesDetail";   
 
 function fmtDate(iso?: string) {
   if (!iso) return "";
@@ -162,6 +164,9 @@ const BUSINESS = {
   lines: ["P.o Box 173, Mpeketoni", "Tel: 0700496690"],
   logo
 };
+const TAGLINE =
+  "Dealers in All Types Of Agro-chemicals and Veterinary Products, Farm Tools, Fertilizers and Poultry Products";
+const PAYMENT = "Paybill 247247 &nbsp;&nbsp; Account 232009";
 
 function esc(v: any) {
   return String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -169,30 +174,43 @@ function esc(v: any) {
 const amt = (n: any) => Number(n || 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /* ---------- Invoice styling (shared by Print and PDF download) ---------- */
+// Drop-in replacement for the INVOICE_CSS block in SalesInvoicesList.tsx (styling only).
+
 const ACCENT = "#E41F07";
 
 const INVOICE_CSS = `
-  @page { size: A4 portrait; margin: 12mm; }
+   @page {
+    size: A4 portrait;
+    margin: 12mm 12mm 16mm;
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font: 10px Arial, Helvetica, sans-serif;
+      color: #6b7280;
+    }
+  }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
-  body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; line-height: 1.45;
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 12px; line-height: 1.45;
          color: #1f2937; background: #fff;
          -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
-  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+  .head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 16px;
           padding-bottom: 14px; border-bottom: 3px solid ${ACCENT}; }
-  .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .brand { display: flex; flex: 1 1 0; align-items: center; justify-content: center; gap: 12px; min-width: 0; }
+  .tagline { flex-basis: 100%; width: 100%; margin-top: -6px; font-size: 13px; font-weight: 700;
+             color: #374151; text-align: center; }
+  .brand > div { text-align: center; }
   .brand img { display: block; max-width: 100px; max-height: 50px; width: auto; height: auto;
                object-fit: contain; flex-shrink: 0; }
-  .brand h1 { margin: 0 0 3px; font-size: 17px; letter-spacing: .3px; }
-  .brand p { margin: 1px 0; color: #6b7280; font-size: 11px; }
+  .brand h1 { margin: 0 0 3px; font-size: 22px; font-weight: 700; letter-spacing: .5px; text-align: center; }
+  .brand p { margin: 1px 0; color: #6b7280; font-size: 12px; text-align: left; }
   .title { text-align: right; flex-shrink: 0; }
   .title h2 { margin: 0; font-size: 28px; letter-spacing: 2px; color: ${ACCENT}; }
-  .title div { color: #6b7280; font-size: 11px; margin-top: 4px; }
+  .title div { color: #6b7280; font-size: 12px; margin-top: 4px; }
 
   .meta { display: flex; justify-content: space-between; gap: 30px; margin: 22px 0; }
   .bill { flex: 1; }
-  .lbl { color: #6b7280; font-size: 10px; text-transform: uppercase; letter-spacing: .8px; margin-bottom: 4px; }
+  .lbl { color: #6b7280; font-size: 12px; text-transform: uppercase; letter-spacing: .6px; margin-bottom: 4px; }
   .bill .nm { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
   .bill p { margin: 2px 0; color: #4b5563; }
   .doc { width: 240px; }
@@ -202,37 +220,43 @@ const INVOICE_CSS = `
 
   table { width: 100%; border-collapse: collapse; }
   thead { display: table-header-group; }
-  thead th { background: ${ACCENT} !important; color: #fff !important; text-align: left; font-size: 10px;
-             text-transform: uppercase; letter-spacing: .6px; padding: 9px 10px; }
+  thead th { background: ${ACCENT} !important; color: #fff !important; text-align: left; font-size: 12px;
+             text-transform: uppercase; letter-spacing: .4px; padding: 9px 10px; }
   th.r, td.r { text-align: right; }
-  tbody td { padding: 9px 10px; vertical-align: top; border-bottom: 1px solid #e5e7eb; overflow-wrap: anywhere; }
+  tbody td, tfoot td { padding: 9px 10px; vertical-align: top; border-bottom: 1px solid #e5e7eb; overflow-wrap: anywhere; font-size: 12px; }
   tbody tr:nth-child(even) { background: #f9fafb; }
   tr { break-inside: avoid; page-break-inside: avoid; }
   .nm2 { font-weight: 600; }
   .cat { color: #9ca3af; font-size: 10px; margin-top: 2px; }
-  .note { margin-top: 10px; color: #9ca3af; font-size: 10px; }
+  .note { margin-top: 10px; color: #9ca3af; font-size: 12px; }
 
-  .totals { margin: 16px 0 0 auto; width: 270px; max-width: 100%; break-inside: avoid; page-break-inside: avoid; }
+  .totals { margin: 12px 0 0 auto; width: 270px; max-width: 100%; break-inside: avoid; page-break-inside: avoid; }
   .totals div { display: flex; justify-content: space-between; padding: 5px 0; }
-  .totals .grand { border-top: 2px solid #111; margin-top: 4px; padding-top: 8px; font-size: 14px; font-weight: 700; }
-  .totals .due { background: ${ACCENT} !important; color: #fff !important; font-weight: 700; font-size: 13px;
+  .totals .grand { border-top: 2px solid #111; margin-top: 4px; padding-top: 8px; font-size: 12px; font-weight: 700; }
+  .totals .due { background: ${ACCENT} !important; color: #fff !important; font-weight: 700; font-size: 12px;
                  padding: 9px 10px; margin-top: 8px; border-radius: 4px; }
 
-  .extra { margin-top: 22px; font-size: 11px; color: #4b5563; white-space: pre-wrap; break-inside: avoid; }
+  .extra { margin-top: 22px; font-size: 12px; color: #4b5563; white-space: pre-wrap; break-inside: avoid; }
   .sign { display: flex; gap: 40px; margin-top: 50px; break-inside: avoid; page-break-inside: avoid; }
-  .sign div { flex: 1; border-top: 1px solid #111; padding-top: 4px; text-align: center; font-size: 11px; color: #4b5563; }
-  .foot { margin-top: 30px; text-align: center; color: #9ca3af; font-size: 10px;
+  .sign div { flex: 1; border-top: 1px solid #111; padding-top: 4px; text-align: center; font-size: 12px; color: #4b5563; }
+  .pay { font-size: 16px; font-weight: 700; color: #111; margin-bottom: 8px; text-align: center; }
+  .foot { margin-top: 30px; text-align: center; color: #9ca3af; font-size: 12px;
           border-top: 1px solid #e5e7eb; padding-top: 10px; }
-            .unpaid { margin-top: 22px; break-inside: avoid; page-break-inside: avoid; }
-  .unpaid h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: #6b7280; }
+  .unpaid { margin-top: 22px; break-inside: avoid; page-break-inside: avoid; }
+  .unpaid h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: #6b7280; }
   .unpaid table th { background: #f3f4f6 !important; color: #374151 !important; }
   .unpaid tr.cur td { font-weight: 700; background: #fef2f2; }
-  .unpaid .allbal { display: flex; justify-content: space-between; margin-top: 8px; padding: 9px 10px;
+  .unpaid .allbal { display: flex; justify-content: space-between; margin-top: 8px; padding: 9px 12px;
                     background: ${ACCENT} !important; color: #fff !important; font-weight: 700;
                     font-size: 13px; border-radius: 4px; }
+                    .unpaid h3,
+.unpaid table th,
+.unpaid table td,
+.unpaid .allbal { font-size: 12px; }
+
 `;
 
-function buildInvoiceHtml(inv: any) {
+function buildInvoiceHtml(inv: any, preparedBy = "") {
   const isPurchase = inv.invoice_type === "purchase";
   const party = {
     name: inv.billed_to_name || inv.customer_name || inv.supplier_name || "",
@@ -256,9 +280,9 @@ function buildInvoiceHtml(inv: any) {
     </tr>`).join("");
   const logoSrc = BUSINESS.logo.startsWith("data:") ? BUSINESS.logo : window.location.origin + BUSINESS.logo;
   const partyLabel = isPurchase ? "Supplier" : "Bill To";
-const title = isPurchase ? "INVOICE" : "SALES INVOICE";  // Unpaid balance from this supplier's earlier bills (purchase invoices only)
-  const prevBal = isPurchase ? Number(inv.previous_balance || 0) : 0;
-    const prevInvs: any[] = !isPurchase ? (inv.previous_invoices || []) : [];
+const title = isPurchase ? "PURCHASE INVOICE" : "SALES INVOICE";  // Unpaid balance from this supplier's earlier bills (purchase invoices only)
+ const prevBal = 0; 
+const prevInvs: any[] = inv.previous_invoices || [];
   const prevInvTotal = prevInvs.reduce((s, x) => s + Number(x.total_amount || 0), 0);
   const prevInvBal = prevInvs.reduce((s, x) => s + Number(x.balance_due || 0), 0);
   const allTotal = prevInvTotal + Number(inv.total_amount || 0);
@@ -292,9 +316,10 @@ const title = isPurchase ? "INVOICE" : "SALES INVOICE";  // Unpaid balance from 
       </div>
     </div>
     <div class="title">
-      <h2>${title}</h2>
-      <div>No. ${esc(docNo)}</div>
+        <h2 style="${isPurchase ? "font-size:22px;" : ""}">${title}</h2>
+  <div>No. ${esc(docNo)}</div>
     </div>
+    <div class="tagline">${TAGLINE}</div>
   </div>
 
   <div class="meta">
@@ -334,18 +359,17 @@ const title = isPurchase ? "INVOICE" : "SALES INVOICE";  // Unpaid balance from 
   ${inv.notes ? `<div class="extra"><strong>Notes</strong>\n${esc(inv.notes)}</div>` : ""}
   ${inv.terms ? `<div class="extra"><strong>Terms</strong>\n${esc(inv.terms)}</div>` : ""}
 
-  <div class="sign"><div>Received by</div></div>
-  <div class="foot">Thank you for your business.</div>
+  <div class="sign"><div>Prepared by: ${esc(preparedBy) || "&nbsp;"}</div></div>
+ <div class="foot">${isPurchase ? "" : `<div class="pay">Payment details: ${PAYMENT}</div>`}Thank you for your business.</div>
 </body></html>`;
   return { html, docNo };
 }
 
-function printInvoice(inv: any) {
-  printHtml(buildInvoiceHtml(inv).html);
+function printInvoice(inv: any, preparedBy = "") {
+  printHtml(buildInvoiceHtml(inv, preparedBy).html);
 }
-async function downloadInvoice(inv: any) {
-  const { html, docNo } = buildInvoiceHtml(inv);
-
+async function downloadInvoice(inv: any, preparedBy = "") {
+  const { html, docNo } = buildInvoiceHtml(inv, preparedBy);
   // A4 = 210 x 297 mm; 12mm margins -> 186 x 273 mm content box.
   // 704px is the content width at 96dpi (794px page minus margins).
   const CONTENT_PX = 704;
@@ -408,7 +432,13 @@ async function downloadInvoice(inv: any) {
       y += sliceH;
       pageNo++;
     }
-
+      const total = pdf.getNumberOfPages();
+for (let i = 1; i <= total; i++) {
+  pdf.setPage(i);
+  pdf.setFontSize(9);
+  pdf.setTextColor(120);
+  pdf.text(`Page ${i} of ${total}`, 105, 292, { align: "center" });
+}
     pdf.save(`Invoice-${String(docNo).replace(/[^\w.-]+/g, "_")}.pdf`);
   } catch (err) {
     console.error("Download failed:", err);
@@ -441,6 +471,9 @@ export default function SalesInvoicesList() {
   const [error, setError]       = useState("");
   const [products, setProducts] = useState<any[]>([]);
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
+  const navigate = useNavigate();
+const [paySaleId, setPaySaleId] = useState<number | null>(null);
+const [preparedBy, setPreparedBy] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -453,7 +486,15 @@ export default function SalesInvoicesList() {
       else console.error("Error loading invoices:", err);
     } finally { setLoading(false); }
   }, []);
-
+useEffect(() => {
+  API.get("users/me/")
+    .then(res => {
+      const u = res.data;
+      const name = `${u?.firstname || ""} ${u?.lastname || ""}`.trim() || u?.username || "";
+      setPreparedBy(name);
+    })
+    .catch(() => setPreparedBy(""));
+}, []);
   const loadSales = useCallback(async () => {
     try {
       const res = await API.get("sales/");
@@ -507,7 +548,26 @@ export default function SalesInvoicesList() {
     const el = document.getElementById("invoice-offcanvas");
     if (el) (window as any).bootstrap?.Offcanvas?.getInstance(el)?.hide();
   };
-
+const goToPayment = (inv: any) => {
+  if (inv.invoice_type === "purchase") {
+    // `supplies` is already loaded above; each supply carries its purchase_invoice id
+    const sp = supplies.find((s: any) => s.purchase_invoice === inv.id);
+    if (!sp) {
+      alert("No supply is linked to this purchase invoice. Record the payment from the Business Payments page instead.");
+      return;
+    }
+    closeOffcanvas();
+    navigate("/supplies", { state: { openSupplyId: sp.id, openPayment: true } }); // use your all_routes entry if you have one
+  } else {
+    if (!inv.sale) {
+      alert("This invoice isn't linked to a sale, so a payment can't be recorded from here.");
+      return;
+    }
+    closeOffcanvas();
+    // wait for Bootstrap's offcanvas to finish closing so the body scroll lock isn't left on
+    setTimeout(() => setPaySaleId(Number(inv.sale)), 350);
+  }
+};
   const handleOpenAdd = () => {
     setMode("add");
     setSelected(null);
@@ -615,7 +675,7 @@ export default function SalesInvoicesList() {
     if (downloadingId) return;            // ignore double-clicks
     setDownloadingId(inv.id);
     try {
-      await downloadInvoice(inv);
+      await downloadInvoice(inv, preparedBy);
     } finally {
       setDownloadingId(null);
     }
@@ -873,12 +933,18 @@ const addSupplyItem = (key: string) => {
   onClick={() => { setMode("view"); setSelected(r); setError(""); openOffcanvas(); }}>
   <i className="ti ti-eye text-info" />
 </button>
+
+{Number(r.balance_due) > 0 && r.status !== "paid" && r.status !== "cancelled" && (
+  <button className="btn btn-sm btn-icon btn-light" title="Record payment" onClick={() => goToPayment(r)}>
+    <i className="ti ti-cash text-primary" />
+  </button>
+)}
                             {r.status !== "paid" && r.status !== "cancelled" && (
                               <button className="btn btn-sm btn-icon btn-light" title="Mark Paid" onClick={() => handleMarkPaid(r.id)}>
                                 <i className="ti ti-circle-check text-success" />
                               </button>
                             )}
-                            <button className="btn btn-sm btn-icon btn-light" title="Print" onClick={() => printInvoice(r)}>
+                            <button className="btn btn-sm btn-icon btn-light" title="Print" onClick={() => printInvoice(r,preparedBy)}>
                               <i className="ti ti-printer text-success" />
                             </button>
                             <button className="btn btn-sm btn-icon btn-light" title="Edit" onClick={() => handleOpenEdit(r)}>
@@ -951,7 +1017,8 @@ const addSupplyItem = (key: string) => {
           {error && <div className="alert alert-danger fs-13 py-2">{error}</div>}
 
           {mode === "view" && selected ? (
-            <InvoiceView item={selected} fmtDate={fmtDate} fmtMoney={fmtMoney} statusBadge={statusBadge} />
+          <InvoiceView item={selected} fmtDate={fmtDate} fmtMoney={fmtMoney} statusBadge={statusBadge}
+  onPay={() => goToPayment(selected)} />
           ) : (
             <form id="invoice-form" onSubmit={handleSave} className="d-flex flex-column gap-3">
               <SectionTitle icon="ti-file-invoice" title="Invoice Information" />
@@ -1204,6 +1271,11 @@ const addSupplyItem = (key: string) => {
         <div className="offcanvas-footer border-top p-3 d-flex justify-content-end gap-2">
           {mode === "view" && selected && (
             <>
+            {Number(selected.balance_due) > 0 && !["paid", "cancelled"].includes(selected.status) && (
+  <button type="button" className="btn btn-sm btn-primary" onClick={() => goToPayment(selected)}>
+    <i className="ti ti-cash me-1" />Record payment
+  </button>
+)}
               <button type="button" className="btn btn-sm btn-outline-secondary"
                 disabled={downloadingId === selected.id}
                 onClick={() => handleDownload(selected)}>
@@ -1211,7 +1283,7 @@ const addSupplyItem = (key: string) => {
                   ? <><span className="spinner-border spinner-border-sm me-1" role="status" />Preparing…</>
                   : <><i className="ti ti-download me-1" />Download</>}
               </button>
-              <button type="button" className="btn btn-sm btn-outline-success" onClick={() => printInvoice(selected)}>
+              <button type="button" className="btn btn-sm btn-outline-success" onClick={() => printInvoice(selected, preparedBy)}>
                 <i className="ti ti-printer me-1" />Print
               </button>
             </>
@@ -1227,6 +1299,12 @@ const addSupplyItem = (key: string) => {
           )}
         </div>
       </div>
+      <SaleDetailOffcanvas
+        saleId={paySaleId}
+        openPayment
+        onClose={() => setPaySaleId(null)}
+        onChanged={load}
+      />
     </div>
   );
 }
@@ -1256,114 +1334,223 @@ function ViewRow({ label, value }: { label: string; value?: React.ReactNode }) {
     </div>
   );
 }
+function Panel({ icon, title, right, children }: { icon: string; title: string; right?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="card shadow-none border mb-0">
+      <div className="card-header py-2 border-bottom d-flex align-items-center justify-content-between">
+        <div className="d-flex align-items-center gap-2">
+          <i className={`ti ${icon} text-primary`} />
+          <h6 className="mb-0 fw-semibold fs-14">{title}</h6>
+        </div>
+        {right}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Info({ label, value, className = "col-6" }: { label: string; value?: React.ReactNode; className?: string }) {
+  return (
+    <div className={className}>
+      <p className="text-muted fs-12 mb-1">{label}</p>
+      <p className="fw-medium fs-13 mb-0" style={{ wordBreak: "break-word" }}>
+        {value || <span className="text-muted">—</span>}
+      </p>
+    </div>
+  );
+}
+
 function InvoiceView({
-  item, fmtDate, fmtMoney, statusBadge,
-}: { item: any; fmtDate: (s?: string) => string; fmtMoney: (v: any) => string; statusBadge: (s: string) => string }) {
+  item, fmtDate, fmtMoney, statusBadge, onPay,
+}: {
+  item: any; fmtDate: (s?: string) => string; fmtMoney: (v: any) => string;
+  statusBadge: (s: string) => string; onPay?: () => void;
+}) {
   const tcfg = TYPE_CONFIG[item.invoice_type];
+  const isPurchase = item.invoice_type === "purchase";
+  const balance = Number(item.balance_due || 0);
+  const canPay = balance > 0 && !["paid", "cancelled"].includes(item.status);
+  const prev: any[] = item.previous_invoices || [];
+  const lines: any[] = item.items || [];
+  const num = (v: any) => Number(v ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const tiles = [
+    { label: "Total", value: fmtMoney(item.total_amount), cls: "" },
+    { label: "Paid", value: fmtMoney(item.amount_paid), cls: "text-success" },
+    { label: balance < 0 ? "Credit" : "Balance", value: fmtMoney(balance),
+      cls: balance > 0 ? "text-danger" : balance < 0 ? "text-primary" : "text-success" },
+  ];
+
   return (
     <div className="d-flex flex-column gap-3 fs-13">
-      <SectionTitle icon="ti-file-invoice" title="Invoice Information" />
-      <div className="row g-3">
-       <ViewRow label="INVOICE TYPE" value={typeLabel(item)} />
-        <div className="col-6"><ViewRow label="INVOICE #" value={item.invoice_number} /></div>
-        <div className="col-6">
-          <ViewRow label="STATUS" value={<span className={`badge ${statusBadge(item.status)}`}>{item.status_display || item.status}</span>} />
+
+      {/* Header */}
+      <div className="d-flex align-items-start justify-content-between flex-wrap gap-2">
+        <div>
+          <div className="text-muted fs-12">{typeLabel(item)}</div>
+          <h5 className="fw-semibold mb-1">{item.invoice_number}</h5>
+          <div className="text-muted fs-12">
+            Issued {fmtDate(item.issue_date)}
+            {item.due_date && <> · Due {fmtDate(item.due_date)}</>}
+          </div>
         </div>
-        <div className="col-6"><ViewRow label="ISSUE DATE" value={fmtDate(item.issue_date)} /></div>
-        <div className="col-6"><ViewRow label="DUE DATE" value={item.due_date ? fmtDate(item.due_date) : ""} /></div>
-        <div className="col-6"><ViewRow label="SALE ORDER #" value={item.sale_order_number} /></div>
-        <div className="col-6"><ViewRow label="BRANCH" value={item.branch_name} /></div>
-        {item.supplier_name && <div className="col-6"><ViewRow label="SUPPLIER" value={item.supplier_name} /></div>}
-        {!!tcfg?.extra?.length && (
-          <>
-            <SectionTitle icon="ti-list-details" title={tcfg.detailsTitle} />
-            <div className="row g-3">
-              {tcfg.extra.map(f => (
-                <div key={f.key} className="col-6">
-                  <ViewRow label={f.label.toUpperCase()}
-                    value={f.type === "date" ? fmtDate(item.extra_data?.[f.key]) : item.extra_data?.[f.key]} />
-                </div>
-              ))}
-            </div>
-          </>
-        )}
+        <span className={`badge ${statusBadge(item.status)}`}>{item.status_display || item.status}</span>
       </div>
 
-      <SectionTitle icon="ti-list" title="Items" />
-      {(item.items || []).length === 0 ? (
-        <div className="text-muted">No items recorded.</div>
-      ) : (
-        <div className="table-responsive">
-          <table className="table table-sm fs-12 mb-0">
-            <thead className="table-light">
-              <tr><th>Item</th><th className="text-end">Qty</th><th className="text-end">Rate</th><th className="text-end">Tax</th><th className="text-end">Total</th></tr>
-            </thead>
-            <tbody>
-              {item.items.map((i: any) => (
-                <tr key={i.id}>
-                  <td>
-                    <div className="fw-medium">{i.description}</div>
-                    {i.category && <div className="text-muted fs-11">{i.category}</div>}
-                  </td>
-                  <td className="text-end">{Number(i.quantity)}</td>
-                  <td className="text-end">{Number(i.unit_price).toLocaleString("en-KE", { minimumFractionDigits: 2 })}</td>
-                  <td className="text-end">{Number(i.tax_amount ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2 })}</td>
-                  <td className="text-end fw-semibold">{Number(i.line_total).toLocaleString("en-KE", { minimumFractionDigits: 2 })}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* Amount tiles */}
+      <div className="row g-2">
+        {tiles.map(t => (
+          <div key={t.label} className="col-4">
+            <div className="border rounded p-2">
+              <p className="text-muted fs-12 mb-1">{t.label}</p>
+              <h6 className={`mb-0 fw-semibold ${t.cls}`}>{t.value}</h6>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Pay banner */}
+      {canPay && onPay && (
+        <div className="alert alert-warning d-flex align-items-center justify-content-between gap-2 py-2 mb-0">
+          <span className="fs-13">
+            <i className="ti ti-alert-circle me-1" />
+            {fmtMoney(balance)} is still unpaid.
+          </span>
+          <button type="button" className="btn btn-sm btn-primary text-nowrap" onClick={onPay}>
+            <i className="ti ti-cash me-1" />{isPurchase ? "Pay in Supplies" : "Pay on Sale"}
+          </button>
         </div>
       )}
-              {(item.previous_invoices || []).length > 0 && (
-  <>
-    <SectionTitle icon="ti-alert-triangle" title="Unpaid invoices" />
-    <table className="table table-sm fs-12 mb-0">
-      <thead className="table-light"><tr><th>Invoice #</th><th className="text-end">Total</th><th className="text-end">Balance</th></tr></thead>
-      <tbody>
-        {item.previous_invoices.map((x: any) => (
-          <tr key={x.invoice_number}>
-            <td>{x.invoice_number}</td>
-            <td className="text-end">{fmtMoney(x.total_amount)}</td>
-            <td className="text-end text-danger">{fmtMoney(x.balance_due)}</td>
-          </tr>
-        ))}
-        <tr className="fw-semibold">
-          <td>{item.invoice_number} (this invoice)</td>
-          <td className="text-end">{fmtMoney(item.total_amount)}</td>
-          <td className="text-end text-danger">{fmtMoney(item.balance_due)}</td>
-        </tr>
-      </tbody>
-    </table>
-  </>
-)}
-      <SectionTitle icon="ti-user" title={tcfg?.partyTitle || "Billed To"} />
-      <div className="row g-3">
-        <div className="col-6"><ViewRow label="NAME" value={item.billed_to_name} /></div>
-        <div className="col-6"><ViewRow label="PHONE" value={item.billed_to_phone} /></div>
-        <div className="col-6"><ViewRow label="EMAIL" value={item.billed_to_email} /></div>
-        <div className="col-12"><ViewRow label="ADDRESS" value={item.billed_to_address} /></div>
-      </div>
 
-      <SectionTitle icon="ti-cash" title="Amounts" />
-      <div className="row g-3">
-        <div className="col-6"><ViewRow label="SUBTOTAL" value={fmtMoney(item.subtotal)} /></div>
-        <div className="col-6"><ViewRow label="DISCOUNT" value={fmtMoney(item.discount_amount)} /></div>
-        <div className="col-6"><ViewRow label="TAX" value={fmtMoney(item.tax_amount)} /></div>
-        <div className="col-6"><ViewRow label="TOTAL" value={<span className="fw-semibold">{fmtMoney(item.total_amount)}</span>} /></div>
-        <div className="col-6"><ViewRow label="PAID" value={fmtMoney(item.amount_paid)} /></div>
-        <div className="col-6"><ViewRow label="BALANCE DUE" value={<span className="text-danger fw-semibold">{fmtMoney(item.balance_due)}</span>} /></div>
-        {item.invoice_type === "purchase" && Number(item.previous_balance) > 0 && (
-          <>
-            <div className="col-6"><ViewRow label="PREVIOUS BALANCE" value={<span className="text-danger">{fmtMoney(item.previous_balance)}</span>} /></div>
-            <div className="col-6"><ViewRow label="TOTAL OUTSTANDING" value={<span className="text-danger fw-semibold">{fmtMoney(Number(item.balance_due || 0) + Number(item.previous_balance || 0))}</span>} /></div>
-          </>
-        )}
-      </div>
+      {/* Details */}
+      <Panel icon="ti-file-invoice" title="Details">
+        <div className="card-body py-3">
+          <div className="row g-3">
+            <Info label="Sale order #" value={item.sale_order_number} />
+            <Info label="Branch" value={item.branch_name} />
+            {item.supplier_name && <Info label="Supplier" value={item.supplier_name} />}
+            {tcfg?.extra?.map(f => (
+              <Info key={f.key} label={f.label}
+                value={f.type === "date" ? fmtDate(item.extra_data?.[f.key]) : item.extra_data?.[f.key]} />
+            ))}
+          </div>
+        </div>
+      </Panel>
 
-      <SectionTitle icon="ti-notes" title="Notes & Terms" />
-      <ViewRow label="NOTES" value={item.notes} />
-      <ViewRow label="TERMS" value={item.terms} />
+      {/* Billed to / supplier */}
+      <Panel icon="ti-user" title={tcfg?.partyTitle || "Billed To"}>
+        <div className="card-body py-3">
+          <div className="row g-3">
+            <Info label="Name" value={item.billed_to_name} />
+            <Info label="Phone" value={item.billed_to_phone} />
+            <Info label="Email" value={item.billed_to_email} />
+            <Info label="Address" value={item.billed_to_address} />
+          </div>
+        </div>
+      </Panel>
+
+      {/* Items */}
+      <Panel icon="ti-list" title="Items"
+        right={<span className="badge bg-primary-transparent text-primary fs-11">{lines.length}</span>}>
+        <div className="card-body p-0">
+          {lines.length === 0 ? (
+            <div className="text-center text-muted py-4">No items recorded.</div>
+          ) : (
+            <div className="table-responsive">
+              <table className="table table-sm mb-0 fs-12 align-middle">
+                <thead className="table-light">
+                  <tr>
+                    <th className="ps-3">Item</th>
+                    <th className="text-end">Qty</th>
+                    <th className="text-end">Rate</th>
+                    <th className="text-end">Tax</th>
+                    <th className="text-end pe-3">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lines.map((i: any, n: number) => (
+                    <tr key={i.id ?? n}>
+                      <td className="ps-3">
+                        <div className="fw-medium">{i.description}</div>
+                        {i.category && <div className="text-muted fs-11">{i.category}</div>}
+                      </td>
+                      <td className="text-end">{Number(i.quantity)}</td>
+                      <td className="text-end">{num(i.unit_price)}</td>
+                      <td className="text-end text-muted">{num(i.tax_amount)}</td>
+                      <td className="text-end fw-semibold pe-3">{num(i.line_total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </Panel>
+
+      {/* Totals */}
+      <Panel icon="ti-receipt" title="Totals">
+        <div className="card-body py-3">
+          <div className="d-flex justify-content-between mb-2"><span className="text-muted">Subtotal</span><span>{fmtMoney(item.subtotal)}</span></div>
+          {Number(item.discount_amount) > 0 && (
+            <div className="d-flex justify-content-between mb-2"><span className="text-muted">Discount</span><span className="text-danger">-{fmtMoney(item.discount_amount)}</span></div>
+          )}
+          <div className="d-flex justify-content-between mb-2"><span className="text-muted">Tax</span><span>{fmtMoney(item.tax_amount)}</span></div>
+          <hr className="my-2" />
+          <div className="d-flex justify-content-between fs-14 fw-semibold mb-2"><span>Total</span><span>{fmtMoney(item.total_amount)}</span></div>
+          <div className="d-flex justify-content-between mb-2"><span className="text-muted">Paid</span><span className="text-success">{fmtMoney(item.amount_paid)}</span></div>
+          <div className="d-flex justify-content-between fw-semibold">
+            <span className="text-muted">{balance < 0 ? "Credit" : "Balance due"}</span>
+            <span className={balance > 0 ? "text-danger" : balance < 0 ? "text-primary" : "text-success"}>{fmtMoney(balance)}</span>
+          </div>
+          {isPurchase && Number(item.previous_balance) > 0 && (
+            <>
+              <hr className="my-2" />
+              <div className="d-flex justify-content-between mb-2"><span className="text-muted">Previous balance</span><span className="text-danger">{fmtMoney(item.previous_balance)}</span></div>
+              <div className="d-flex justify-content-between fw-semibold"><span>Total outstanding</span><span className="text-danger">{fmtMoney(balance + Number(item.previous_balance || 0))}</span></div>
+            </>
+          )}
+        </div>
+      </Panel>
+
+      {/* Earlier unpaid invoices */}
+      {prev.length > 0 && (
+        <Panel icon="ti-alert-triangle" title="Earlier unpaid invoices"
+          right={<span className="badge bg-danger-transparent text-danger fs-11">{prev.length}</span>}>
+          <div className="card-body p-0">
+            <table className="table table-sm mb-0 fs-12">
+              <thead className="table-light">
+                <tr><th className="ps-3">Invoice #</th><th className="text-end">Total</th><th className="text-end pe-3">Balance</th></tr>
+              </thead>
+              <tbody>
+                {prev.map((x: any) => (
+                  <tr key={x.invoice_number}>
+                    <td className="ps-3">{x.invoice_number}</td>
+                    <td className="text-end">{fmtMoney(x.total_amount)}</td>
+                    <td className="text-end pe-3 text-danger">{fmtMoney(x.balance_due)}</td>
+                  </tr>
+                ))}
+                <tr className="table-light fw-semibold">
+                  <td className="ps-3">{item.invoice_number} (this)</td>
+                  <td className="text-end">{fmtMoney(item.total_amount)}</td>
+                  <td className="text-end pe-3 text-danger">{fmtMoney(item.balance_due)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
+
+      {/* Notes & terms */}
+      {(item.notes || item.terms) && (
+        <Panel icon="ti-notes" title="Notes & Terms">
+          <div className="card-body py-3">
+            <div className="row g-3">
+              {item.notes && <Info className="col-12" label="Notes" value={<span style={{ whiteSpace: "pre-wrap" }}>{item.notes}</span>} />}
+              {item.terms && <Info className="col-12" label="Terms" value={<span style={{ whiteSpace: "pre-wrap" }}>{item.terms}</span>} />}
+            </div>
+          </div>
+        </Panel>
+      )}
     </div>
   );
 }

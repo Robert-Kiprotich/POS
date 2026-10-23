@@ -168,14 +168,7 @@ useEffect(() => {
               <i className="ti ti-arrow-bar-to-right" />
             </button>
             {/* Search */}
-            <div className="me-auto d-flex align-items-center header-search d-lg-flex d-none">
-              <div className="input-icon position-relative me-2">
-                <input type="text" className="form-control" placeholder="Search Keyword" />
-                <span className="input-icon-addon d-inline-flex p-0 header-search-icon">
-                  <i className="ti ti-command" />
-                </span>
-              </div>
-            </div>
+           
           </div>
 
           <div className="d-flex align-items-center">

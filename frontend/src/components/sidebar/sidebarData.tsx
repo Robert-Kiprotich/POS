@@ -94,7 +94,7 @@ export const SidebarData = [
             roles: [ADMIN, MANAGER, KEEPER], submenuItems: [],
           },
           {
-            key: "store", label: "Store", link: route.store, submenu: false, showSubRoute: false,
+            key: "store", label: "Store Management", link: route.store, submenu: false, showSubRoute: false,
             icon: "building-warehouse", base: "system-logs", materialicons: "start", dot: false,
             roles: [ADMIN, MANAGER, KEEPER], submenuItems: [],
           },

@@ -20,26 +20,35 @@ const amt = (n: any) =>
   Number(n || 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const INVOICE_CSS = `
-  @page { size: A4 portrait; margin: 12mm; }
+    @page {
+    size: A4 portrait;
+    margin: 12mm 12mm 16mm;
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font: 10px Arial, Helvetica, sans-serif;
+      color: #6b7280;
+    }
+  }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
-  body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; line-height: 1.45;
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 12px; line-height: 1.45;
          color: #1f2937; background: #fff;
          -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-   .head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 16px;
+  .head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 16px;
           padding-bottom: 14px; border-bottom: 3px solid ${ACCENT}; }
-  .tagline { flex-basis: 100%; width: 100%; margin-top: -6px; font-size: 11px; font-weight: 600;
-             color: #4b5563; }
-  .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .tagline { flex-basis: 100%; width: 100%; margin-top: -6px; font-size: 13px; font-weight: 700;
+             color: #374151; text-align: center; }
+  .brand { display: flex; flex: 1 1 0; align-items: center; justify-content: center; gap: 12px; min-width: 0; }
+  .brand > div { text-align: center; }
   .brand img { display: block; max-width: 100px; max-height: 50px; width: auto; height: auto; object-fit: contain; flex-shrink: 0; }
-  .brand h1 { margin: 0 0 3px; font-size: 17px; letter-spacing: .3px; }
-  .brand p { margin: 1px 0; color: #6b7280; font-size: 11px; }
+  .brand h1 { margin: 0 0 3px; font-size: 22px; font-weight: 700; letter-spacing: .5px; text-align: center; }
+  .brand p { margin: 1px 0; color: #6b7280; font-size: 12px; text-align: left; }
   .title { text-align: right; flex-shrink: 0; }
   .title h2 { margin: 0; font-size: 28px; letter-spacing: 2px; color: ${ACCENT}; }
-  .title div { color: #6b7280; font-size: 11px; margin-top: 4px; }
+  .title div { color: #6b7280; font-size: 12px; margin-top: 4px; }
   .meta { display: flex; justify-content: space-between; gap: 30px; margin: 22px 0; }
   .bill { flex: 1; }
-  .lbl { color: #6b7280; font-size: 10px; text-transform: uppercase; letter-spacing: .8px; margin-bottom: 4px; }
+  .lbl { color: #6b7280; font-size: 12px; text-transform: uppercase; letter-spacing: .6px; margin-bottom: 4px; }
   .bill .nm { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
   .bill p { margin: 2px 0; color: #4b5563; }
   .doc { width: 240px; }
@@ -48,34 +57,30 @@ const INVOICE_CSS = `
   .doc span:last-child { font-weight: 700; }
   table { width: 100%; border-collapse: collapse; }
   thead { display: table-header-group; }
-  thead th { background: ${ACCENT} !important; color: #fff !important; text-align: left; font-size: 10px;
-             text-transform: uppercase; letter-spacing: .6px; padding: 9px 10px; }
+  thead th { background: ${ACCENT} !important; color: #fff !important; text-align: left; font-size: 12px;
+             text-transform: uppercase; letter-spacing: .4px; padding: 9px 10px; }
   th.r, td.r { text-align: right; }
   tbody td { padding: 9px 10px; vertical-align: top; border-bottom: 1px solid #e5e7eb; overflow-wrap: anywhere; }
   tbody tr:nth-child(even) { background: #f9fafb; }
   tr { break-inside: avoid; page-break-inside: avoid; }
   .nm2 { font-weight: 600; }
-  .cat { color: #9ca3af; font-size: 10px; margin-top: 2px; }
-  .note { margin-top: 10px; color: #9ca3af; font-size: 10px; }
+  .cat { color: #9ca3af; font-size: 12px; margin-top: 2px; }
+  .note { margin-top: 10px; color: #9ca3af; font-size: 12px; }
   .totals { margin: 16px 0 0 auto; width: 270px; max-width: 100%; break-inside: avoid; page-break-inside: avoid; }
   .totals div { display: flex; justify-content: space-between; padding: 5px 0; }
   .totals .grand { border-top: 2px solid #111; margin-top: 4px; padding-top: 8px; font-size: 14px; font-weight: 700; }
   .totals .due { background: ${ACCENT} !important; color: #fff !important; font-weight: 700; font-size: 13px;
                  padding: 9px 10px; margin-top: 8px; border-radius: 4px; }
-  .extra { margin-top: 22px; font-size: 11px; color: #4b5563; white-space: pre-wrap; break-inside: avoid; }
+  .extra { margin-top: 22px; font-size: 12px; color: #4b5563; white-space: pre-wrap; break-inside: avoid; }
   .sign { display: flex; gap: 40px; margin-top: 50px; break-inside: avoid; page-break-inside: avoid; }
-  .sign div { flex: 1; border-top: 1px solid #111; padding-top: 4px; text-align: center; font-size: 11px; color: #4b5563; }
-  .foot { margin-top: 30px; text-align: center; color: #9ca3af; font-size: 10px; border-top: 1px solid #e5e7eb; padding-top: 10px; }
-    .pay { font-size: 12px; font-weight: 700; color: #111; margin-bottom: 6px; }
-    .unpaid { margin-top: 22px; break-inside: avoid; page-break-inside: avoid; }
-  .unpaid h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: #6b7280; }
+  .sign div { flex: 1; border-top: 1px solid #111; padding-top: 4px; text-align: center; font-size: 12px; color: #4b5563; }
+  .foot { margin-top: 30px; text-align: center; color: #9ca3af; font-size: 12px; border-top: 1px solid #e5e7eb; padding-top: 10px; }
+  .pay { font-size: 16px; font-weight: 700; color: #111; margin-bottom: 8px; text-align: center; }
+  .unpaid { margin-top: 22px; break-inside: avoid; page-break-inside: avoid; }
+  .unpaid h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: #6b7280; }
   .unpaid table th { background: #f3f4f6 !important; color: #374151 !important; }
   .unpaid tr.cur td { font-weight: 700; background: #fef2f2; }
   .unpaid tfoot td { font-weight: 700; border-top: 2px solid #111; border-bottom: 0; }
-    .unpaid { margin-top: 22px; break-inside: avoid; page-break-inside: avoid; }
-  .unpaid h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: #6b7280; }
-  .unpaid table th { background: #f3f4f6 !important; color: #374151 !important; }
-  .unpaid tr.cur td { font-weight: 700; background: #fef2f2; }
   .unpaid .allbal { display: flex; justify-content: space-between; margin-top: 8px; padding: 9px 10px;
                     background: ${ACCENT} !important; color: #fff !important; font-weight: 700;
                     font-size: 13px; border-radius: 4px; }
@@ -106,8 +111,8 @@ export function buildInvoiceHtml(inv: any) {
     </tr>`).join("");
 
   const logoSrc = BUSINESS.logo.startsWith("data:") ? BUSINESS.logo : window.location.origin + BUSINESS.logo;
-  const prevBal = isPurchase ? Number(inv.previous_balance || 0) : 0;
-      const prevInvs: any[] = !isPurchase ? (inv.previous_invoices || []) : [];
+ const prevBal = 0; 
+const prevInvs: any[] = inv.previous_invoices || [];
   const prevInvTotal = prevInvs.reduce((s, x) => s + Number(x.total_amount || 0), 0);
   const prevInvBal = prevInvs.reduce((s, x) => s + Number(x.balance_due || 0), 0);
   const unpaidHtml = prevInvs.length ? `
@@ -197,13 +202,18 @@ const STATEMENT_CSS = `
   .bar button.alt { background: #374151; }
   @media print { .bar { display: none; } }
   .sign-box { margin-top: 50px; break-inside: avoid; page-break-inside: avoid; }
-  .sign-box .t { font-size: 11px; font-weight: 700; margin-bottom: 18px; color: #4b5563; }
+  .sign-box .t { font-size: 12px; font-weight: 700; margin-bottom: 18px; color: #4b5563; }
   .sign-row { display: flex; gap: 30px; margin-bottom: 30px; }
   .sign-row > div { flex: 1; }
   .sign-row .line { border-bottom: 1px solid #111; height: 22px; }
-  .sign-row .cap { margin-top: 4px; font-size: 10px; color: #6b7280; text-transform: uppercase; letter-spacing: .6px; }
-    .bar { position: sticky; top: 0; z-index: 10; background: #111827; padding: 8px 12px;
+  .sign-row .cap { margin-top: 4px; font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: .4px; }
+  .bar { position: sticky; top: 0; z-index: 10; background: #111827; padding: 8px 12px;
          display: flex; gap: 8px; justify-content: flex-end; }
+.sheet table thead th { font-size: 10px; padding: 6px 8px; }
+  .sheet table tbody td { font-size: 10px; padding: 5px 8px; }
+  .sheet .nm2 { font-size: 12px; }
+  .sheet .totals div { font-size: 12px; }
+  .sheet .totals .due { font-size: 12px; }
 
   @media screen {
     body.preview { background: #d1d5db; }
@@ -251,8 +261,10 @@ export function buildStatementHtml(s: any, preview = false) {
   <div class="meta">
     <div class="bill">
       <div class="lbl">Customer</div>
-      <div class="nm">${esc(s.name || "—")}</div>
+      <div class="nm">
       ${s.business ? `<p>${esc(s.business)}</p>` : ""}
+     </div>
+       ${esc(s.name || "—")}
       ${s.phone ? `<p>${esc(s.phone)}</p>` : ""}
       ${s.email ? `<p>${esc(s.email)}</p>` : ""}
     </div>
@@ -302,4 +314,127 @@ export function openStatement(s: any, mode: "preview" | "print") {
   if (!win) { alert("Allow popups to view the statement."); return; }
   win.document.write(buildStatementHtml(s, true));
   win.document.close();
+}
+/* ---------------- Generic list report (store stock, history, etc.) ---------------- */
+
+export type ListColumn = { label: string; align?: "r" };
+
+export function buildListHtml(opts: {
+  title: string;
+  subtitle?: string;
+  columns: ListColumn[];
+  rows: (string | number)[][];
+  summary?: { label: string; value: string }[];
+  landscape?: boolean;
+}) {
+  const { title, subtitle, columns, rows, summary = [], landscape = false } = opts;
+  const logoSrc = BUSINESS.logo.startsWith("data:") ? BUSINESS.logo : window.location.origin + BUSINESS.logo;
+
+  const head = columns.map(c => `<th class="${c.align || ""}">${esc(c.label)}</th>`).join("");
+  const body = rows.length
+    ? rows.map(r => `<tr>${r.map((v, i) => `<td class="${columns[i]?.align || ""}">${esc(v)}</td>`).join("")}</tr>`).join("")
+    : `<tr><td colspan="${columns.length}" style="text-align:center;color:#9ca3af">No records</td></tr>`;
+
+  const css = `
+    @page { size: A4 ${landscape ? "landscape" : "portrait"}; margin: 12mm; }
+    .sum { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+    .sum div { flex: 1 1 120px; border: 1px solid #e5e7eb; border-radius: 4px; padding: 6px 10px; }
+    .sum span { display: block; color: #6b7280; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; }
+    .sum strong { font-size: 12px; }
+    .list thead th { font-size: 12px; padding: 4px 6px; }
+.list tbody td { font-size: 12px; padding: 3px 6px; }
+  `;
+
+  return `
+<html><head><title>${esc(title)}</title><style>${INVOICE_CSS}${css}</style></head>
+<body>
+  <div class="head">
+    <div class="brand">
+      ${BUSINESS.logo ? `<img src="${logoSrc}" alt="Company Logo" />` : ""}
+      <div><h1>${esc(BUSINESS.name)}</h1>${BUSINESS.lines.map(l => `<p>${esc(l)}</p>`).join("")}</div>
+    </div>
+    <div class="title"><h2>${esc(title.toUpperCase())}</h2><div>${esc(subtitle || "")}</div></div>
+    <div class="tagline">${TAGLINE}</div>
+  </div>
+
+  ${summary.length ? `<div class="sum">${summary.map(s => `<div><span>${esc(s.label)}</span><strong>${esc(s.value)}</strong></div>`).join("")}</div>` : ""}
+
+  <table class="list">
+    <thead><tr>${head}</tr></thead>
+    <tbody>${body}</tbody>
+  </table>
+  <div class="note">${rows.length} record${rows.length !== 1 ? "s" : ""} · Printed ${esc(fmtDate(new Date().toISOString()))}</div>
+
+ 
+  
+</body></html>`;
+}
+
+export async function downloadHtmlPdf(html: string, filename: string, landscape = false) {
+  const PAGE_W = landscape ? 297 : 210, PAGE_H = landscape ? 210 : 297, MARGIN = 12;
+  const CONTENT_W = PAGE_W - MARGIN * 2, CONTENT_H = PAGE_H - MARGIN * 2;
+  const CONTENT_PX = Math.round((CONTENT_W / 25.4) * 96);
+
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText = `position:fixed;left:-10000px;top:0;width:${CONTENT_PX}px;height:1200px;border:0;`;
+  document.body.appendChild(iframe);
+
+  try {
+    const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import("html2canvas"), import("jspdf")]);
+    const doc = iframe.contentDocument!;
+    doc.open(); doc.write(html); doc.close();
+    doc.body.style.width = `${CONTENT_PX}px`;
+
+    await Promise.all(Array.from(doc.images).map(img =>
+      img.complete ? Promise.resolve() : new Promise(res => { img.onload = img.onerror = () => res(null); })));
+    await (doc as any).fonts?.ready;
+
+   const contentH = Math.ceil(doc.body.scrollHeight);
+console.log("PDF content height (px):", contentH, "page fits about", Math.floor((CONTENT_H / 25.4) * 96));
+
+const canvas = await html2canvas(doc.body, {
+  scale: 2, backgroundColor: "#ffffff", useCORS: true,
+  width: CONTENT_PX, height: contentH,
+  windowWidth: CONTENT_PX, windowHeight: contentH,
+});
+
+       const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: landscape ? "landscape" : "portrait" });
+    const pxPerMm = canvas.width / CONTENT_W;
+    const pageHpx = Math.floor(CONTENT_H * pxPerMm);
+    const imgH = canvas.height / pxPerMm;   // total content height in mm
+
+    if (imgH <= CONTENT_H * 1.12) {
+      // fits on one page, or is only slightly over: scale to fit
+      const k = Math.min(1, CONTENT_H / imgH);
+      pdf.addImage(
+        canvas.toDataURL("image/jpeg", 0.95), "JPEG",
+        MARGIN + (CONTENT_W - CONTENT_W * k) / 2, MARGIN,
+        CONTENT_W * k, imgH * k
+      );
+    } else {
+      let y = 0, n = 0;
+      while (y < canvas.height) {
+        const sliceH = Math.min(pageHpx, canvas.height - y);
+        const slice = document.createElement("canvas");
+        slice.width = canvas.width; slice.height = sliceH;
+        const ctx = slice.getContext("2d")!;
+        ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, slice.width, slice.height);
+        ctx.drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+        if (n > 0) pdf.addPage();
+        pdf.addImage(slice.toDataURL("image/jpeg", 0.95), "JPEG", MARGIN, MARGIN, CONTENT_W, sliceH / pxPerMm);
+        y += sliceH; n++;
+      }
+    }
+
+    const total = pdf.getNumberOfPages();
+    for (let i = 1; i <= total; i++) {
+      pdf.setPage(i);
+      pdf.setFontSize(9);
+      pdf.setTextColor(120);
+      pdf.text(`Page ${i} of ${total}`, PAGE_W / 2, PAGE_H - 5, { align: "center" });
+    }
+    pdf.save(filename.endsWith(".pdf") ? filename : `${filename}.pdf`);
+  } finally {
+    iframe.remove();
+  }
 }

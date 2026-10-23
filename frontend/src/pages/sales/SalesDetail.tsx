@@ -33,9 +33,11 @@ interface Props {
   saleId: string | number | null;   // null = closed
   onClose: () => void;
   onChanged?: () => void;           // called after a payment is recorded (refresh the list)
+  openPayment?: boolean;            // open straight on the payment form
 }
 
-export default function SaleDetailOffcanvas({ saleId, onClose, onChanged }: Props) {
+export default function SaleDetailOffcanvas({ saleId, onClose, onChanged, openPayment }: Props) {
+
   const [sale, setSale]       = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
@@ -83,7 +85,7 @@ export default function SaleDetailOffcanvas({ saleId, onClose, onChanged }: Prop
   useEffect(() => {
     if (saleId == null) return;
     setSale(null);
-    setShowPaymentForm(false);
+   setShowPaymentForm(!!openPayment);
     setPayError("");
     load();
   }, [saleId, load]);

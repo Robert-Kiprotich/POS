@@ -339,15 +339,20 @@ export default function CustomerFormOffcanvas({
                               <span className="fw-bold">KSh {fmtMoney(item.total_amount)}</span>
                             </div>
 
-                            <div className="d-flex justify-content-between fs-12 text-muted mt-1">
-                              <span>Paid / Balance:</span>
-                              <span>
-                                KSh {fmtMoney(item.amount_paid)} /{" "}
-                                <strong className={Number(item.balance_due || 0) > 0 ? "text-danger" : "text-success"}>
-                                  KSh {fmtMoney(item.balance_due)}
-                                </strong>
-                              </span>
-                            </div>
+                            {(() => {
+  const bal = Number(item.total_amount || 0) - Number(item.amount_paid || 0);
+  return (
+    <div className="d-flex justify-content-between fs-12 text-muted mt-1">
+      <span>Paid / Balance:</span>
+      <span>
+        KSh {fmtMoney(item.amount_paid)} /{" "}
+        <strong className={bal > 0 ? "text-danger" : bal < 0 ? "text-primary" : "text-success"}>
+          KSh {fmtMoney(bal)}
+        </strong>
+      </span>
+    </div>
+  );
+})()}
                           </div>
                         </div>
                       );

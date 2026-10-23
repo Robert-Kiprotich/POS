@@ -101,7 +101,27 @@ function isSalesClerk(user: any) {
   return roleName.includes("sales clerk") || roleName.includes("cashier");
 }
 
-/** Renders the same plain-text receipt layout used for the thermal printout and the saved-receipt history. */
+
+type ReceiptItem = {
+  product_name: string;
+  quantity: number | string;
+  unit_price: number | string;
+  line_total: number | string;
+};
+
+type ReceiptData = {
+  order_number: string;
+  customer_name: string;
+  sale_type: string;
+  grand_total: number | string;
+  created_at: string;
+  items: ReceiptItem[];
+  amount_paid: number | string;
+  balance_due: number | string;
+  cashier_name?: string;
+};
+
+
 function buildReceiptText(opts: {
   orderNumber: string;
   customerName: string;
@@ -117,55 +137,147 @@ function buildReceiptText(opts: {
   balance: number;
   pending?: boolean;
 }): string {
-  const width = 42; // characters — fits a standard 80mm thermal roll
+  const width = 42;
   const line = "-".repeat(width);
-  const center = (s: string) => {
-    const pad = Math.max(0, Math.floor((width - s.length) / 2));
-    return " ".repeat(pad) + s;
-  };
-  const cols = (left: string, right: string) => {
-    const space = Math.max(1, width - left.length - right.length);
-    return left + " ".repeat(space) + right;
+
+  const center = (value: string) => {
+    const text = String(value ?? "");
+    return " ".repeat(Math.max(0, Math.floor((width - text.length) / 2))) + text;
   };
 
-  const itemLines = opts.items.map(i => {
-        const total = i.unit_price * (Number(i.quantity) || 0) * (1 + i.tax_rate / 100);
-    const name = i.product_name.length > width ? i.product_name.slice(0, width) : i.product_name;
-    const detail = cols(`  ${i.quantity} x ${money(i.unit_price)}`, money(total));
-    return `${name}\n${detail}`;
-  }).join("\n");
+  const cols = (label: string, value: string | number) => {
+    const right = String(value ?? "-");
+    const spaces = Math.max(1, width - label.length - right.length);
+    return label + " ".repeat(spaces) + right;
+  };
+
+  const itemLines = opts.items.flatMap((item) => {
+    const quantity = Number(item.quantity) || 0;
+    const unitPrice = Number(item.unit_price) || 0;
+    const taxRate = Number(item.tax_rate) || 0;
+    const total = unitPrice * quantity * (1 + taxRate / 100);
+
+    return [
+      item.product_name,
+      cols(`${quantity} x ${money(unitPrice)}`, money(total)),
+    ];
+  });
 
   const paymentLines = opts.payments
-    .filter(p => parseFloat(p.amount) > 0)
-    .map(p => cols(p.method, money(parseFloat(p.amount) || 0)))
-    .join("\n");
+    .filter((payment) => Number(payment.amount) > 0)
+    .map((payment) =>
+      cols(payment.method, money(Number(payment.amount) || 0))
+    );
 
-  const now = new Date();
   return [
-    center("SUPER  AGRO SOLUTIONS"),          // TODO: replace with real shop details
+    center("SUPER AGRO SOLUTIONS"),
     center("P.o Box 173, Mpeketoni"),
-    center("Tel:  0700496690"),
+    center("Tel: 0700496690"),
     line,
     cols("Receipt#:", opts.orderNumber),
-    cols("Date:", now.toLocaleDateString()),
-    cols("Time:", now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })),
-   
+    cols("Date:", new Date().toLocaleDateString()),
+    cols(
+      "Time:",
+      new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    ),
     cols("Customer:", opts.customerName),
     cols("Sale Type:", opts.saleType),
     line,
-    itemLines,
+    ...itemLines,
     line,
     cols("Subtotal:", money(opts.subtotal)),
     cols("Tax:", money(opts.taxTotal)),
     cols("Discount:", `-${money(opts.discount)}`),
     line,
-   cols("TOTAL:", money(opts.grandTotal)),
+    cols("TOTAL:", money(opts.grandTotal)),
     line,
     ...(opts.pending ? [center("** PAYMENT PENDING **")] : []),
-    paymentLines || cols("Payment:", money(opts.amountPaid)),
-    cols("Balance:", money(Math.abs(opts.balance)) + (opts.balance < 0 ? " (change)" : "")),
+    ...(paymentLines.length
+      ? paymentLines
+      : [cols("Payment:", money(opts.amountPaid))]),
+    cols(
+      "Balance:",
+      money(Math.abs(opts.balance)) +
+        (opts.balance < 0 ? " (change)" : "")
+    ),
     line,
     cols("You Were Served By:", opts.cashierName || "-"),
+    center("Paybill: 247247 Account: 232009"),
+    center("Thank you for shopping!"),
+    center("Goods sold in good condition"),
+    center("are non-refundable."),
+  ].join("\n");
+}
+
+
+function buildReprintReceipt(sale: ReceiptData): string {
+  const width = 42;
+  const line = "-".repeat(width);
+
+  const center = (value: string) => {
+    const text = String(value ?? "");
+    return " ".repeat(
+      Math.max(0, Math.floor((width - text.length) / 2))
+    ) + text;
+  };
+
+  // Keep the label and value together instead of spreading
+  // the cashier's name across the full receipt width.
+  const cols = (label: string, value: string | number) => {
+    return `${label} ${String(value ?? "-").trim()}`;
+  };
+
+  const money = (value: string | number) =>
+    Number(value || 0).toFixed(2);
+
+  const itemLines = sale.items.flatMap((item) => [
+    item.product_name,
+    cols(
+      `${item.quantity} x ${money(item.unit_price)}`,
+      money(item.line_total)
+    ),
+  ]);
+
+  return [
+    // Fixed header
+    center("SUPER AGRO SOLUTIONS"),
+    center("P.o Box 173, Mpeketoni"),
+    center("Tel: 0700496690"),
+    line,
+
+    // Sale details from Django
+    cols("Receipt#:", sale.order_number),
+    cols(
+      "Date:",
+      new Date(sale.created_at).toLocaleDateString()
+    ),
+    cols(
+      "Time:",
+      new Date(sale.created_at).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    ),
+    cols("Customer:", sale.customer_name),
+    cols("Sale Type:", sale.sale_type),
+    line,
+
+    ...itemLines,
+    line,
+
+    cols("TOTAL:", money(sale.grand_total)),
+    cols("Paid:", money(sale.amount_paid)),
+    cols("Balance:", money(sale.balance_due)),
+    line,
+
+    cols("You Were Served By:", sale.cashier_name || "-"),
+
+    // Fixed footer
+    line,
+    center("Paybill: 247247 Account: 232009"),
     center("Thank you for shopping!"),
     center("Goods sold in good condition"),
     center("are non-refundable."),
@@ -1180,13 +1292,19 @@ await showSuccess(
                     </div>
                     <div className="text-end flex-shrink-0">
                       <div className="fw-semibold">{money(Number(r.grand_total) || 0)}</div>
-                      <button
-                        className="btn btn-sm btn-outline-primary mt-1 py-0 px-2 fs-11"
-                  onClick={() => printReceiptText(r.receipt_text, `Receipt ${r.order_number}`, r.sale_type)}
-                        disabled={!r.receipt_text}
-                      >
-                        <i className="ti ti-printer me-1" />Reprint
-                      </button>
+                     <button
+  className="btn btn-sm btn-outline-primary mt-1 py-0 px-2 fs-11"
+  onClick={() =>
+    printReceiptText(
+      buildReprintReceipt(r),
+      `Receipt ${r.order_number}`,
+      r.sale_type
+    )
+  }
+>
+  <i className="ti ti-printer me-1" />
+  Reprint
+</button>
                     </div>
                   </div>
                 </div>

@@ -977,6 +977,9 @@ class StoreStock(models.Model):
     product = models.OneToOneField(Product, related_name="store_stock", on_delete=models.CASCADE)
     quantity = models.IntegerField(default=0, validators=[MinValueValidator(0)])
     reorder_level = models.IntegerField(default=5, help_text="Low-stock flag at/below this quantity")
+    damaged_quantity  = models.PositiveIntegerField(default=0)
+    expired_quantity  = models.PositiveIntegerField(default=0)
+    returned_quantity = models.PositiveIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -1001,16 +1004,29 @@ class StoreMovement(models.Model):
         ADJUSTMENT = "adjustment", "Adjustment"
         DAMAGED = "damaged", "Damaged"
         EXPIRED = "expired", "Expired"
+        RETURNED = "returned", "Returned"
+        DISPOSED = "disposed", "Disposed"
 
     product = models.ForeignKey(Product, related_name="store_movements", on_delete=models.CASCADE)
     movement_type = models.CharField(max_length=20, choices=MovementType.choices)
     quantity_change = models.IntegerField(help_text="Positive adds to the store, negative removes")
     balance_after = models.IntegerField(default=0, help_text="Store quantity after this movement")
     note = models.CharField(max_length=255, blank=True, default="")
+    confirmed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, related_name="store_movements_confirmed",
+        null=True, blank=True, on_delete=models.SET_NULL,
+        help_text="Who confirmed stock received into the store.",
+    )
+    authorised_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, related_name="store_movements_authorised",
+        null=True, blank=True, on_delete=models.SET_NULL,
+        help_text="Who authorised a move to Head Office.",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, related_name="store_movements", null=True, blank=True,
         on_delete=models.SET_NULL,
     )
+    unit_cost = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

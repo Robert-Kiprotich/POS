@@ -257,10 +257,11 @@ function buildStatement(customer: any, allCustomers: any[]) {
   const matches = allCustomers.filter(
     (c) => norm(c.name) === norm(customer.name) && norm(c.business_name) === norm(customer.business_name)
   );
-  const sales = matches
-    .flatMap((c) => getCustomerSales(c))
-    .sort((a: any, b: any) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
-
+ const sales = matches
+  .flatMap((c) => getCustomerSales(c))
+  .map((x: any) => ({ ...x, balance_due: saleBalance(x) }))
+  .sort((a: any, b: any) =>
+    new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
   const sum = (k: string) => sales.reduce((s: number, x: any) => s + Number(x[k] || 0), 0);
   return {
     name: customer.name || "",
@@ -273,7 +274,8 @@ function buildStatement(customer: any, allCustomers: any[]) {
     totalBalance: sum("balance_due"),
   };
 }
-
+const saleBalance = (sale: any) =>
+  Number(sale?.total_amount || 0) - Number(sale?.amount_paid || 0);
 function previewStatement(customer: any, allCustomers: any[]) {
   openStatement(buildStatement(customer, allCustomers), "preview");
 }
@@ -326,7 +328,13 @@ async function downloadStatement(customer: any, allCustomers: any[]) {
       y += sliceH;
       first = false;
     }
-
+    const total = pdf.getNumberOfPages();
+for (let i = 1; i <= total; i++) {
+  pdf.setPage(i);
+  pdf.setFontSize(9);
+  pdf.setTextColor(120);
+  pdf.text(`Page ${i} of ${total}`, 105, 292, { align: "center" });
+}
     const safe = (s.name || "customer").replace(/[^a-z0-9]+/gi, "_");
     pdf.save(`statement_${safe}_${new Date().toISOString().slice(0, 10)}.pdf`);
   } catch (err) {
@@ -920,28 +928,21 @@ export default function CustomersList() {
 
                           {/* BALANCE */}
 
-                          <td className="text-end">
-
-                            {sale ? (
-                              <span
-                                className={
-                                  Number(
-                                    sale.balance_due || 0
-                                  ) > 0
-                                    ? "text-danger fw-semibold"
-                                    : "text-success"
-                                }
-                              >
-                                KSh{" "}
-                                {formatMoney(
-                                  sale.balance_due
-                                )}
-                              </span>
-                            ) : (
-                              "—"
-                            )}
-
-                          </td>
+                          {/* BALANCE */}
+<td className="text-end">
+  {sale ? (
+    (() => {
+      const bal = saleBalance(sale);
+      return (
+        <span className={bal > 0 ? "text-danger fw-semibold" : bal < 0 ? "text-primary fw-semibold" : "text-success"}>
+          KSh {formatMoney(bal)}
+        </span>
+      );
+    })()
+  ) : (
+    "—"
+  )}
+</td>
 
 
                           {/* DATE */}

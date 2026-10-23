@@ -134,10 +134,9 @@ class CustomerSaleSerializer(serializers.ModelSerializer):
         ]
 
     def get_balance_due(self, obj):
-        return max(
-            obj.total_amount - obj.amount_paid,
-            Decimal("0.00")
-        )
+        return obj.total_amount - obj.amount_paid,
+           
+        
 
 
 
@@ -171,37 +170,56 @@ class PaymentSerializer(serializers.ModelSerializer):
         if value <= 0:
             raise serializers.ValidationError("Payment amount must be greater than zero.")
         return value
+
+from rest_framework import serializers
+
 class SaleReceiptSerializer(serializers.ModelSerializer):
     customer_name = serializers.SerializerMethodField()
-    sale_type = serializers.SerializerMethodField()
-    grand_total = serializers.DecimalField(source="total_amount", max_digits=12, decimal_places=2, read_only=True)
-    receipt_text = serializers.SerializerMethodField()
+    sale_type = serializers.CharField(read_only=True)
+    grand_total = serializers.DecimalField(
+        source="total_amount",
+        max_digits=12,
+        decimal_places=2,
+        read_only=True,
+    )
+    items = serializers.SerializerMethodField()
+    cashier_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Sale
-        fields = ["id", "order_number", "customer_name", "sale_type", "grand_total", "created_at", "receipt_text"]
+        fields = [
+            "id",
+            "order_number",
+            "customer_name",
+            "sale_type",
+            "grand_total",
+            "created_at",
+            "items",
+            "amount_paid",
+            "balance_due",
+            "cashier_name",
+        ]
 
     def get_customer_name(self, obj):
         return obj.customer.name if obj.customer else "Walk-in Customer"
 
-    def get_sale_type(self, obj):
-        return obj.sale_type
-    def get_receipt_text(self, obj):
-        lines = [
-            f"Receipt: {obj.order_number}",
-            f"Date: {obj.created_at:%d %b %Y %H:%M}",
-            f"Customer: {self.get_customer_name(obj)}",
-            "-" * 30,
+    def get_cashier_name(self, obj):
+        # Adjust "cashier" to your actual Sale model field.
+        cashier = getattr(obj, "cashier", None)
+        if cashier:
+            return cashier.get_full_name() or cashier.get_username()
+        return "-"
+
+    def get_items(self, obj):
+        return [
+            {
+                "product_name": item.product.name,
+                "quantity": item.quantity,
+                "unit_price": str(item.unit_price),
+                "line_total": str(item.line_total),
+            }
+            for item in obj.items.select_related("product").all()
         ]
-        for i in obj.items.all():
-            lines.append(f"{i.quantity} x {i.product.name} @ {i.unit_price} = {i.line_total:.2f}")
-        lines += [
-            "-" * 30,
-            f"Total: {obj.total_amount}",
-            f"Paid:  {obj.amount_paid}",
-            f"Balance: {obj.balance_due}",
-        ]
-        return "\n".join(lines)
 
 class SaleItemSerializer(serializers.ModelSerializer):
     product_detail = ProductMiniSerializer(source="product", read_only=True)
@@ -270,7 +288,7 @@ class SaleSerializer(serializers.ModelSerializer):
 
         read_only_fields = ["order_number", "subtotal", "tax_amount", "total_amount", "created_at", "updated_at"]
     def get_balance(self, obj):
-        return max(obj.total_amount - obj.amount_paid, Decimal("0.00"))
+        return obj.total_amount - obj.amount_paid
 
     def get_profit(self, obj):
         revenue = sum((i.unit_price * i.quantity for i in obj.items.all()), Decimal("0.00"))
@@ -624,7 +642,8 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
         ]
         extra_kwargs = {"sale": {"required": False, "allow_null": True},
                         "supplier": {"required": False, "allow_null": True}}
-
+    def get_loss_value(self, obj):
+        return round(abs(obj.quantity_change) * (obj.unit_cost or 0), 2)
     def to_internal_value(self, data):
         mutable = data.copy() if hasattr(data, "copy") else dict(data)
         for key in ("due_date", "issue_date","supplier"):
@@ -640,7 +659,8 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
         from django.db.models import Q
         earlier = (
             SalesInvoice.objects
-            .filter(supplier_id=obj.supplier_id, invoice_type="purchase", balance_due__gt=0)
+            .filter(supplier_id=obj.supplier_id, invoice_type="purchase")
+            .exclude(balance_due=0)
             .exclude(status="cancelled")
             .exclude(pk=obj.pk)
             .filter(Q(issue_date__lt=obj.issue_date) |
@@ -648,30 +668,34 @@ class SalesInvoiceSerializer(serializers.ModelSerializer):
         )
         return earlier.aggregate(t=Coalesce(Sum("balance_due"), Decimal("0.00")))["t"]
     def get_previous_invoices(self, obj):
-        """Earlier unpaid invoices for the same customer (sales/credit/supply invoices only)."""
         from django.db.models import Q
-        if obj.invoice_type == "purchase" or not obj.pk:
+        if not obj.pk:
             return []
 
-        qs = (SalesInvoice.objects
-              .exclude(invoice_type="purchase")
-              .exclude(status="cancelled")
-              .filter(balance_due__gt=0)
-              .exclude(pk=obj.pk))
+        base = (SalesInvoice.objects
+                .exclude(status="cancelled")
+                .exclude(balance_due=0)
+                .exclude(pk=obj.pk))
 
-        customer_id = obj.sale.customer_id if obj.sale_id else None
-        if customer_id:
-            qs = qs.filter(sale__customer_id=customer_id)
-        elif (obj.billed_to_name or "").strip():
-            qs = qs.filter(sale__isnull=True, billed_to_name__iexact=obj.billed_to_name.strip())
+        if obj.invoice_type == "purchase":
+            if not obj.supplier_id:
+                return []
+            qs = base.filter(invoice_type="purchase", supplier_id=obj.supplier_id)
         else:
-            return []
+            qs = base.exclude(invoice_type="purchase")
+            customer_id = obj.sale.customer_id if obj.sale_id else None
+            if customer_id:
+                qs = qs.filter(sale__customer_id=customer_id)
+            elif (obj.billed_to_name or "").strip():
+                qs = qs.filter(sale__isnull=True, billed_to_name__iexact=obj.billed_to_name.strip())
+            else:
+                return []
 
         qs = qs.filter(Q(issue_date__lt=obj.issue_date) |
-                       Q(issue_date=obj.issue_date, id__lt=obj.id)).order_by("issue_date", "id")
+                    Q(issue_date=obj.issue_date, id__lt=obj.id)).order_by("issue_date", "id")
 
         return [{"invoice_number": i.invoice_number, "issue_date": i.issue_date,
-                 "total_amount": i.total_amount, "balance_due": i.balance_due} for i in qs]
+                "total_amount": i.total_amount, "balance_due": i.balance_due} for i in qs]
     def validate_issue_date(self, value):
         if value is None:
             raise serializers.ValidationError("Issue date is required.")
@@ -1419,10 +1443,7 @@ class BusinessPaymentSerializer(serializers.ModelSerializer):
             if inst:
                 others = others.exclude(pk=inst.pk)
             already = others.aggregate(t=Sum("amount"))["t"] or Decimal("0.00")
-            remaining = invoice.total_amount - already
-            if amount is not None and amount > remaining:
-                raise serializers.ValidationError(
-                    {"amount": f"This bill only has {remaining} left to pay."})
+           
 
         if category == C.SUPPLIER and not supplier:
             raise serializers.ValidationError({"supplier": "Select the supplier you are paying."})
@@ -1436,26 +1457,54 @@ class StoreStockSerializer(serializers.ModelSerializer):
     item_number = serializers.CharField(source="product.item_number", read_only=True)
     category_name = serializers.CharField(source="product.category.name", read_only=True, default=None)
     is_low_stock = serializers.BooleanField(read_only=True)
+    cost_price = serializers.DecimalField(source="product.cost_price", max_digits=12,
+                                          decimal_places=2, read_only=True)
+    issue_units = serializers.SerializerMethodField()
+    total_value = serializers.SerializerMethodField()
+    damaged_value = serializers.SerializerMethodField()
+    expired_value = serializers.SerializerMethodField()
+    returned_value = serializers.SerializerMethodField()
+    issue_value = serializers.SerializerMethodField()
+    manufacturer = serializers.CharField(source="product.manufacturer", read_only=True, default="")
+    supplier_name = serializers.SerializerMethodField()
 
     class Meta:
         model = StoreStock
         fields = [
-            "id", "product", "product_detail", "product_name", "item_number", "category_name",
-            "quantity", "reorder_level", "is_low_stock", "updated_at",
-        ]
-        # Quantity only changes through receive / move_to_head_office, never by direct edit.
-        read_only_fields = ["quantity", "updated_at"]
-
+                "id", "product", "product_detail", "product_name", "item_number", "category_name",
+                "quantity", "reorder_level", "cost_price", "total_value",
+                "damaged_quantity", "expired_quantity","damaged_value","expired_value","manufacturer","supplier_name","returned_value","issue_value", "returned_quantity", "issue_units",
+                "is_low_stock", "updated_at",
+            ]
+        read_only_fields = ["quantity", "damaged_quantity", "expired_quantity",
+                                "returned_quantity", "updated_at"]
+    def _val(self, obj, qty):
+        return round(qty * obj.product.cost_price, 2)
+    def get_damaged_value(self, obj):  return self._val(obj, obj.damaged_quantity)
+    def get_expired_value(self, obj):  return self._val(obj, obj.expired_quantity)
+    def get_returned_value(self, obj): return self._val(obj, obj.returned_quantity)
+    def get_issue_value(self, obj):    return self._val(obj, obj.issue_units_count())
+    def get_issue_units(self,obj):
+        return obj.damaged_quantity + obj.expired_quantity + obj.returned_quantity
+    def get_supplier_name(self, obj):
+         return getattr(obj, "last_supplier", None) or ""
+    def get_issue_value(self, obj):
+        return self._val(obj, obj.damaged_quantity + obj.expired_quantity + obj.returned_quantity)
     def validate_reorder_level(self, value):
         if value < 0:
             raise serializers.ValidationError("Reorder level cannot be negative.")
         return value
+    def get_total_value(self, obj):
+        return round(obj.quantity * obj.product.cost_price, 2)
 
 
 class StoreMovementSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source="product.name", read_only=True)
     item_number = serializers.CharField(source="product.item_number", read_only=True)
     movement_type_display = serializers.CharField(source="get_movement_type_display", read_only=True)
+    confirmed_by_name = serializers.SerializerMethodField()
+    authorised_by_name = serializers.SerializerMethodField()
+    loss_value = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
 
     class Meta:
@@ -1463,15 +1512,24 @@ class StoreMovementSerializer(serializers.ModelSerializer):
         fields = [
             "id", "product", "product_name", "item_number",
             "movement_type", "movement_type_display", "quantity_change", "balance_after",
-            "note", "created_by", "created_by_name", "created_at",
+            "note","confirmed_by","authorised_by","confirmed_by_name","unit_cost", "loss_value", "authorised_by_name","created_by", "created_by_name", "created_at",
         ]
         read_only_fields = fields
+    def _name(self, u):
+        return (f"{u.firstname} {u.lastname}".strip() or u.username) if u else ""
+    def get_loss_value(self, obj):
+        return round(abs(obj.quantity_change) * (obj.unit_cost or 0), 2)
+    def get_confirmed_by_name(self, obj):
+        return self._name(obj.confirmed_by)
 
+    def get_authorised_by_name(self, obj):
+        return self._name(obj.authorised_by)
     def get_created_by_name(self, obj):
         u = obj.created_by
         if not u:
             return "System"
         return f"{u.firstname} {u.lastname}".strip() or u.username
+    
 
 class DepositSerializer(serializers.ModelSerializer):
     branch_name = serializers.CharField(source="branch.name", read_only=True)
@@ -1640,7 +1698,7 @@ class SupplySerializer(serializers.ModelSerializer):
 
     def get_balance_due(self, obj):
         total = self.get_invoice_total(obj)
-        return None if total is None else max(total - self._paid(obj), Decimal("0.00"))
+        return None if total is None else total - self._paid(obj)
 
     def get_payment_status(self, obj):
         total = self.get_invoice_total(obj)
